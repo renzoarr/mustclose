@@ -28,6 +28,18 @@ func getImpl2Ptr() *example2 {
 	return &example2{}
 }
 
+// someFunc creates a Closer object but doesn't call close nor returns it, so it should be reported by the analyzer
+func someFunc() {
+	e := example2{} // want "Closed is not called on e"
+	_ = e
+}
+
+// someFunc2 creates a Closer object but doesn't call close but does return it
+func someFunc2() example2 {
+	e := example2{} // ok. is returned
+	return e
+}
+
 func main() {
 	// this does not implement io.Closer. Method has pointer receiver
 	// var aa io.Closer = example{} // this is invalid
@@ -35,6 +47,7 @@ func main() {
 	_ = a
 	// a.Close() // but I can call this?
 
+	// TBD: change this to not throw an error since it's nil
 	var b *example // want "Closed is not called on b"
 	_ = b
 
@@ -42,6 +55,7 @@ func main() {
 	var c example2 // want "Closed is not called on c"
 	_ = c
 
+	// TBD: change this to not throw an error since it's nil
 	// pointer to struct implements closer
 	var d *example2 // want "Closed is not called on d"
 	_ = d

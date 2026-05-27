@@ -82,6 +82,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		}
 
 		// this switch should find all of the calls to Close() err and remove the vars from the map
+		// if the variable is returned than we should also remove it from the map, since it's not our responsibility to close it anymore
 		switch stmt := node.(type) {
 		/*
 			case *ast.AssignStmt:
@@ -115,6 +116,20 @@ func run(pass *analysis.Pass) (interface{}, error) {
 				fmt.Println("Close is called on: ", obj.Name())
 				delete(open, obj)
 			}
+		case *ast.ReturnStmt:
+			fmt.Println("##### return statement found ######")
+			for _, result := range stmt.Results {
+				fmt.Println("found return value: ", result)
+				fmt.Println("return value position: ", result.Pos())
+				ident, ok := result.(*ast.Ident)
+				if !ok {
+					continue
+				}
+				obj := pass.TypesInfo.Uses[ident]
+				fmt.Println("returning: ", obj.Name())
+				delete(open, obj)
+			}
+
 		default:
 		}
 		return true
