@@ -33,7 +33,7 @@ func main() {
 	// var aa io.Closer = example{} // this is invalid
 	var a example
 	_ = a
-	// a.Close() // but I can call this, so i'm not sure why this doesn't implement io.Closer
+	// a.Close() // but I can call this?
 
 	var b *example // want "Closed is not called on b"
 	_ = b

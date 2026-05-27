@@ -12,6 +12,7 @@ import (
 )
 
 var closerType *types.Interface
+var errorType *types.Interface
 
 func init() {
 	ioPackage, err := importer.Default().Import("io")
@@ -19,6 +20,7 @@ func init() {
 		panic(fmt.Sprintf("failed to import io package: %s", err))
 	}
 	closerType = ioPackage.Scope().Lookup("Closer").Type().Underlying().(*types.Interface)
+	errorType = types.Universe.Lookup("error").Type().Underlying().(*types.Interface)
 }
 
 func NewAnalyzer() *analysis.Analyzer {
@@ -107,9 +109,8 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			fmt.Println("method call position: ", stmt.Pos())
 			fmt.Println("method call receiver: ", selector.X)
 			fmt.Println("method call method: ", selector.Sel.Name)
-			if selector.Sel.Name == "Close" && stmt.Args == nil && stmt.Ellipsis == token.NoPos {
-				// TODO: the return type should also be of type error, but I don't know how to check that
-				// close called so we remove the X from the map
+			if selector.Sel.Name == "Close" && stmt.Args == nil && stmt.Ellipsis == token.NoPos && callReturnsError(pass.TypesInfo, stmt) {
+				// Close called so we remove the X from the map
 				obj := pass.TypesInfo.Uses[selector.X.(*ast.Ident)]
 				fmt.Println("Close is called on: ", obj.Name())
 				delete(open, obj)
@@ -134,6 +135,15 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	return nil, nil
 }
 
-func callsClose(exp *ast.Expr) bool {
+func callReturnsError(typesInfo *types.Info, call *ast.CallExpr) bool {
+	switch t := typesInfo.Types[call].Type.(type) {
+	case *types.Named:
+		// Single return
+		return types.Implements(t, errorType)
+	case *types.Pointer:
+		// Single return via pointer
+		return types.Implements(t, errorType)
+	}
+
 	return false
 }
