@@ -1,5 +1,10 @@
 package testdata
 
+import (
+	"io"
+	"os"
+)
+
 type example struct{}
 
 func (e *example) Close() error {
@@ -72,22 +77,25 @@ func main() {
 	var h example2
 	defer h.Close()
 
-	/*
-		var f io.Closer = &example{}
-		_ = f                        // to avoid unused variable error
+	var i io.Closer = &example{} // want "Closed is not called on i"
+	_ = i                        // to avoid unused variable error
 
-		var g io.Closer
-		_ = g           // to avoid unused variable error
+	var j io.Closer // want "Closed is not called on j"
+	_ = j           // to avoid unused variable error
 
-		var h io.ReadCloser
-		_ = h // to avoid unused variable error
+	var k io.ReadCloser // want "Closed is not called on k"
+	_ = k               // to avoid unused variable error
 
-		f, err := os.Create("/tmp/blah")
-	*/
-	// f, err := os.Create("/tmp/blah")
-	// fmt.Println(err)
-	// f, err = os.Create("/tmp/blah")
-	// _ = f
+	l, err := os.Create("/tmp/blah") // want "Closed is not called on l"
+	_ = err                          // to avoid unused variable error
+	_ = l                            // to avoid unused variable error
 
-	// TODO: some other type (not interface) that timplements io.closer from a package. So that it's a selector expresssion
+	m := getImpl2() // want "Closed is not called on m"
+	_ = m
+
+	// // TODO: this should report some error since the method does return an implementation of io.Closer, but because I don't assign it to a variable we can't close it
+	// _ = getImpl2Ptr() // "Closed is not called on the result of getImpl2Ptr()"
+
+	// // TODO: this should report some error since the method does return an implementation of io.Closer, but because I don't assign it to a variable we can't close it
+	// getImpl2Ptr() // "Closed is not called on the result of getImpl2Ptr()"
 }
