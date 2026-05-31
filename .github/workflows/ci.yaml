@@ -1,0 +1,29 @@
+name: mustclose
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        go: ["1.25.x", "1.26.x"]
+    name: go ${{ matrix.go }}
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+    - name: Set up Go
+      uses: actions/setup-go@v6
+      with:
+        go-version: ${{ matrix.go }}
+    - name: Build
+      run: go build -v ./...
+    - name: Test
+      run: go test -v ./...

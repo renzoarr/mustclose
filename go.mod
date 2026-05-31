@@ -1,6 +1,6 @@
 module github.com/renzoarr/mustclose
 
-go 1.25.5
+go 1.25.0
 
 require golang.org/x/tools v0.45.0
 
