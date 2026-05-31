@@ -32,15 +32,6 @@ func NewAnalyzer() *analysis.Analyzer {
 	}
 }
 
-// question: what I have I have something like this
-/*
-var a = os.Open("file.txt")
-// assuming a is a pointer
-b := a
-b.Close()
-// I guess is shouldn't fail on var a ?
-*/
-
 func run(pass *analysis.Pass) (interface{}, error) {
 
 	// closers that aren't closed

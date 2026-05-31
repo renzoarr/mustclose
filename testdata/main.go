@@ -47,10 +47,8 @@ func someFunc2() example2 {
 
 func main() {
 	// this does not implement io.Closer. Method has pointer receiver
-	// var aa io.Closer = example{} // this is invalid
 	var a example
 	_ = a
-	// a.Close() // but I can call this?
 
 	// TBD: change this to not throw an error since it's nil
 	var b *example // want "Closed is not called on b"
@@ -87,15 +85,24 @@ func main() {
 	_ = k               // to avoid unused variable error
 
 	l, err := os.Create("/tmp/blah") // want "Closed is not called on l"
-	_ = err                          // to avoid unused variable error
-	_ = l                            // to avoid unused variable error
+	_, _ = l, err                    // to avoid unused variable error
 
 	m := getImpl2() // want "Closed is not called on m"
 	_ = m
 
-	// // TODO: this should report some error since the method does return an implementation of io.Closer, but because I don't assign it to a variable we can't close it
+	// TODO: this should report some error since the method does return an implementation of io.Closer, but because I don't assign it to a variable we can't close it
+	// Or, we should treat assignment to _ as an ignore? similar to errorcheck?
 	// _ = getImpl2Ptr() // "Closed is not called on the result of getImpl2Ptr()"
 
-	// // TODO: this should report some error since the method does return an implementation of io.Closer, but because I don't assign it to a variable we can't close it
+	// TODO: this should report some error since the method does return an implementation of io.Closer, but because I don't assign it to a variable we can't close it
+	// Or, we should treat assignment to _ as an ignore? similar to errorcheck?
 	// getImpl2Ptr() // "Closed is not called on the result of getImpl2Ptr()"
+
+	/* TODO
+	   var a = os.Open("file.txt")
+	   // assuming a is a pointer
+	   b := a
+	   b.Close()
+	   // we shouldn't fail on a not being closed
+	*/
 }
