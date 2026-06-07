@@ -36,88 +36,103 @@ func run(pass *analysis.Pass) (interface{}, error) {
 
 	// closers that aren't closed
 	open := map[types.Object]struct{}{}
+	// returned closers that are not assigned
+	unassigned := map[types.Object]struct{}{}
+
 	inspect := func(node ast.Node) bool {
-		// TODO: we should check function calls that return an io.Closer as well, but aren't assigned to a variable
 		// TODO: should we also check fields in structs? lilke http resp.Body which you need to call close on as well?
 
-		// we will have this switch find the var declarations of variables that implement io.Closer
-		// and also of function calls that return an io.Closer (implementation) and are not assigned to a variable
+		// find all variables that implement io.Closer
 		switch stmt := node.(type) {
 		case *ast.ValueSpec:
-			fmt.Println("##### variable declartion found ######")
-			fmt.Println("found var declaration: ", stmt.Names[0].Name)
-			fmt.Println("declartion position: ", stmt.Pos()) // this is the same as the one below
+			// variable declaration
 			obj := pass.TypesInfo.Defs[stmt.Names[0]]
-			fmt.Println("defines: ", obj.Pos()) // this is the same as the one above
 			if types.Implements(obj.Type(), closerType) {
-				fmt.Println("the var implements io.Closer")
 				open[obj] = struct{}{}
+				return true
 			}
 		case *ast.AssignStmt:
 			if stmt.Tok != token.DEFINE {
 				break
 			}
-			fmt.Println("##### short variable declaration found ######")
+			// short variable declaration
 			for _, lhs := range stmt.Lhs {
-				fmt.Println("found var declaration: ", lhs)
-				fmt.Println("declaration position: ", lhs.Pos()) // this is the current position
 				obj := pass.TypesInfo.Defs[lhs.(*ast.Ident)]
-				fmt.Println("defines: ", obj.Pos()) // this is the same as the pair in the ValueSpec
 				if types.Implements(obj.Type(), closerType) {
-					fmt.Println("the var implements io.Closer")
 					open[obj] = struct{}{}
+					return true
 				}
 			}
-
 		default:
 		}
 
-		// this switch should find all of the calls to Close() err and remove the vars from the map
-		// if the variable is returned than we should also remove it from the map, since it's not our responsibility to close it anymore
+		// find all calls that return an io.closer (and not assigned to a variable)
 		switch stmt := node.(type) {
-		/*
-			case *ast.AssignStmt:
-				if stmt.Tok == token.DEFINE {
-					break
+		case *ast.ExprStmt:
+			// find unassigned function calls
+			if call, ok := stmt.X.(*ast.CallExpr); ok {
+				if callReturnsCloser(pass.TypesInfo, call) {
+					name := ""
+					if id, ok := call.Fun.(*ast.Ident); ok {
+						name = id.Name
+					} else if selector, ok := call.Fun.(*ast.SelectorExpr); ok {
+						name = selector.Sel.Name
+					}
+					obj := types.NewFunc(stmt.Pos(), nil, name, nil)
+					unassigned[obj] = struct{}{}
+					return true
 				}
-				fmt.Println("##### variable assignment found ######")
-				for _, rhs := range stmt.Rhs {
-					fmt.Println("found use of var: ", rhs)
-					fmt.Println("use position: ", rhs.Pos()) // this is the current position
-					// fixme: this fails on `_ = a.Close()`, since the right hand side is not an expresssion; This whole block is just and example
-					fmt.Println("uses: ", pass.TypesInfo.Uses[rhs.(*ast.Ident)].Pos()) // this is the same as the pair in the ValueSpec
-					// TODO: don't check uses, check if Close is called
-					// delete(used, pass.TypesInfo.Uses[rhs.(*ast.Ident)])
+			}
+		case *ast.GoStmt:
+			// find go calls that return io.Closers
+			if callReturnsCloser(pass.TypesInfo, stmt.Call) {
+				name := ""
+				if id, ok := stmt.Call.Fun.(*ast.Ident); ok {
+					name = id.Name
+				} else if selector, ok := stmt.Call.Fun.(*ast.SelectorExpr); ok {
+					name = selector.Sel.Name
 				}
-		*/
+				obj := types.NewFunc(stmt.Call.Pos(), nil, name, nil)
+				unassigned[obj] = struct{}{}
+				return true
+			}
+
+		case *ast.DeferStmt:
+			// find defer calls that return io.Closers
+			if callReturnsCloser(pass.TypesInfo, stmt.Call) {
+				name := ""
+				if id, ok := stmt.Call.Fun.(*ast.Ident); ok {
+					name = id.Name
+				} else if selector, ok := stmt.Call.Fun.(*ast.SelectorExpr); ok {
+					name = selector.Sel.Name
+				}
+				obj := types.NewFunc(stmt.Call.Pos(), nil, name, nil)
+				unassigned[obj] = struct{}{}
+				return true
+			}
+		default:
+		}
+
+		// find all Close() calls, and returned variables that implement io.Closer
+		switch stmt := node.(type) {
 		case *ast.CallExpr:
 			selector, ok := stmt.Fun.(*ast.SelectorExpr)
 			if !ok { // Closer is a method, so it should always be a selector expression, if it's not we can ignore it
 				// TODO: what if the close method is assigned to a variable and then called? like `closeFunc := a.Close; closeFunc()`
 				break
 			}
-			fmt.Println("##### method call found ######")
-			fmt.Println("found method call: ", stmt.Fun)
-			fmt.Println("method call position: ", stmt.Pos())
-			fmt.Println("method call receiver: ", selector.X)
-			fmt.Println("method call method: ", selector.Sel.Name)
 			if selector.Sel.Name == "Close" && stmt.Args == nil && stmt.Ellipsis == token.NoPos && callReturnsError(pass.TypesInfo, stmt) {
 				// Close called so we remove the X from the map
 				obj := pass.TypesInfo.Uses[selector.X.(*ast.Ident)]
-				fmt.Println("Close is called on: ", obj.Name())
 				delete(open, obj)
 			}
 		case *ast.ReturnStmt:
-			fmt.Println("##### return statement found ######")
 			for _, result := range stmt.Results {
-				fmt.Println("found return value: ", result)
-				fmt.Println("return value position: ", result.Pos())
 				ident, ok := result.(*ast.Ident)
 				if !ok {
 					continue
 				}
 				obj := pass.TypesInfo.Uses[ident]
-				fmt.Println("returning: ", obj.Name())
 				delete(open, obj)
 			}
 
@@ -136,8 +151,13 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			Message: fmt.Sprintf("Closed is not called on %s", id.Name()),
 		})
 	}
+	for id := range unassigned {
+		pass.Report(analysis.Diagnostic{
+			Pos:     id.Pos(),
+			Message: fmt.Sprintf("Closed is not called on the result of %s", id.Name()),
+		})
+	}
 
-	fmt.Println(open)
 	return nil, nil
 }
 
@@ -151,5 +171,21 @@ func callReturnsError(typesInfo *types.Info, call *ast.CallExpr) bool {
 		return types.Implements(t, errorType)
 	}
 
+	return false
+}
+
+func callReturnsCloser(typesInfo *types.Info, call *ast.CallExpr) bool {
+	switch t := typesInfo.Types[call].Type.(type) {
+	case *types.Named, *types.Pointer:
+		// Single return
+		return types.Implements(t, closerType)
+	case *types.Tuple:
+		// Multiple returns, we check if any of them is an io.Closer
+		for i := 0; i < t.Len(); i++ {
+			if types.Implements(t.At(i).Type(), closerType) {
+				return true
+			}
+		}
+	}
 	return false
 }

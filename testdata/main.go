@@ -90,13 +90,23 @@ func main() {
 	m := getImpl2() // want "Closed is not called on m"
 	_ = m
 
-	// TODO: this should report some error since the method does return an implementation of io.Closer, but because I don't assign it to a variable we can't close it
-	// Or, we should treat assignment to _ as an ignore? similar to errorcheck?
-	// _ = getImpl2Ptr() // "Closed is not called on the result of getImpl2Ptr()"
+	n := getImpl2Ptr()
+	defer n.Close()
+
+	o := getImpl2Ptr()
+	go o.Close()
+
+	getImpl2Ptr()       // want "Closed is not called on the result of getImpl2Ptr"
+	go getImpl2Ptr()    // want "Closed is not called on the result of getImpl2Ptr"
+	defer getImpl2Ptr() // want "Closed is not called on the result of getImpl2Ptr"
+
+	os.Create("/tmp/blah")       // want "Closed is not called on the result of Create"
+	go os.Create("/tmp/blah")    // want "Closed is not called on the result of Create"
+	defer os.Create("/tmp/blah") // want "Closed is not called on the result of Create"
 
 	// TODO: this should report some error since the method does return an implementation of io.Closer, but because I don't assign it to a variable we can't close it
 	// Or, we should treat assignment to _ as an ignore? similar to errorcheck?
-	// getImpl2Ptr() // "Closed is not called on the result of getImpl2Ptr()"
+	// _ = getImpl2Ptr() // "Closed is not called on the result of getImpl2Ptr()"
 
 	/* TODO
 	   var a = os.Open("file.txt")
