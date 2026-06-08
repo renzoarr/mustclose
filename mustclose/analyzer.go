@@ -41,6 +41,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 
 	inspect := func(node ast.Node) bool {
 		// TODO: should we also check fields in structs? lilke http resp.Body which you need to call close on as well?
+		// we should also not raise an error for closers that are returned as part of a struct.
 
 		// find all variables that implement io.Closer
 		switch stmt := node.(type) {
@@ -56,12 +57,20 @@ func run(pass *analysis.Pass) (interface{}, error) {
 				break
 			}
 			// short variable declaration
+			found := false
 			for _, lhs := range stmt.Lhs {
-				obj := pass.TypesInfo.Defs[lhs.(*ast.Ident)]
+				// could still be a var assignment when you have multiple lhs vars with := , if at least one of them is a declaration
+				obj, ok := pass.TypesInfo.Defs[lhs.(*ast.Ident)]
+				if !ok {
+					continue
+				}
 				if types.Implements(obj.Type(), closerType) {
 					open[obj] = struct{}{}
-					return true
+					found = true
 				}
+			}
+			if found {
+				return true
 			}
 		default:
 		}

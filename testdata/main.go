@@ -33,6 +33,10 @@ func getImpl2Ptr() *example2 {
 	return &example2{}
 }
 
+func multipleImplementations() (example2, example2) {
+	return example2{}, example2{}
+}
+
 // someFunc creates a Closer object but doesn't call close nor returns it, so it should be reported by the analyzer
 func someFunc() {
 	e := example2{} // want "Closed is not called on e"
@@ -103,6 +107,17 @@ func main() {
 	os.Create("/tmp/blah")       // want "Closed is not called on the result of Create"
 	go os.Create("/tmp/blah")    // want "Closed is not called on the result of Create"
 	defer os.Create("/tmp/blah") // want "Closed is not called on the result of Create"
+
+	// declare p before using it as lhs with :=
+	var p example2                    // want "Closed is not called on p"
+	p, q := multipleImplementations() // want "Closed is not called on q"
+	_, _ = p, q
+
+	r, s := multipleImplementations() // want "Closed is not called on r" "Closed is not called on s"
+	_, _ = r, s
+
+	// TODO
+	// defer func() { assert.NoError(t, h.Close(), "failed to close netns") }()
 
 	// TODO: this should report some error since the method does return an implementation of io.Closer, but because I don't assign it to a variable we can't close it
 	// Or, we should treat assignment to _ as an ignore? similar to errorcheck?
