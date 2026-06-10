@@ -58,9 +58,9 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			// short variable declaration
 			found := false
 			for _, lhs := range stmt.Lhs {
-				// could still be a var assignment when you have multiple lhs vars with := , if at least one of them is a declaration
+				// could still be a var assignment iso definition when you have multiple lhs vars with := , if at least one of them is a declaration. In that case, ok will be false
 				obj, ok := pass.TypesInfo.Defs[lhs.(*ast.Ident)]
-				if !ok {
+				if !ok || obj == nil { // ok is true and obj is nil on the use of := in a switch
 					continue
 				}
 				if types.Implements(obj.Type(), closerType) {

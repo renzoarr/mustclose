@@ -1,6 +1,7 @@
 package testdata
 
 import (
+	"fmt"
 	"io"
 	"os"
 )
@@ -142,16 +143,24 @@ func main() {
 	var t example2
 	defer func() { errorChecker(t.Close()) }()
 
-	// TODO: causes panic:
-	// var u any = "asdf"
-	// switch a := u.(type) {
-	// case string:
-	// 	_ = a
-	// default:
-	// }
+	var u any = example2{}
+	switch a := u.(type) {
+	case example2:
+		b := a // want "Closed is not called on b"
+		_ = b
+	default:
+	}
 
-	v := structWithCloser{field1: &example{}}
-	v.field1.Close() // multiple SelectorExpr
+	var v any = example2{}
+	switch a := v.(type) {
+	case example2:
+		// TODO: we should also return an error if a is not assigned to another var
+		fmt.Println(a)
+	default:
+	}
+
+	w := structWithCloser{field1: &example{}}
+	w.field1.Close() // multiple SelectorExpr
 
 	// TODO: this should report some error since the method does return an implementation of io.Closer, but because I don't assign it to a variable we can't close it
 	// Or, we should treat assignment to _ as an ignore? similar to errorcheck?
