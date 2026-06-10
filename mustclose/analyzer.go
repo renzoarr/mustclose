@@ -33,7 +33,6 @@ func NewAnalyzer() *analysis.Analyzer {
 }
 
 func run(pass *analysis.Pass) (interface{}, error) {
-
 	// closers that aren't closed
 	open := map[types.Object]struct{}{}
 	// returned closers that are not assigned
@@ -50,7 +49,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			obj := pass.TypesInfo.Defs[stmt.Names[0]]
 			if types.Implements(obj.Type(), closerType) {
 				open[obj] = struct{}{}
-				return true
+				return false
 			}
 		case *ast.AssignStmt:
 			if stmt.Tok != token.DEFINE {
@@ -70,7 +69,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 				}
 			}
 			if found {
-				return true
+				return false
 			}
 		default:
 		}
@@ -89,7 +88,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 					}
 					obj := types.NewFunc(stmt.Pos(), nil, name, nil)
 					unassigned[obj] = struct{}{}
-					return true
+					return false
 				}
 			}
 		case *ast.GoStmt:
@@ -103,7 +102,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 				}
 				obj := types.NewFunc(stmt.Call.Pos(), nil, name, nil)
 				unassigned[obj] = struct{}{}
-				return true
+				return false
 			}
 
 		case *ast.DeferStmt:
@@ -117,7 +116,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 				}
 				obj := types.NewFunc(stmt.Call.Pos(), nil, name, nil)
 				unassigned[obj] = struct{}{}
-				return true
+				return false
 			}
 		default:
 		}
