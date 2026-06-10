@@ -150,9 +150,8 @@ func main() {
 	// default:
 	// }
 
-	// FIXME: causes panic
-	// v := structWithCloser{field1: &example{}}
-	// v.field1.Close() // multiple SelectorExpr
+	v := structWithCloser{field1: &example{}}
+	v.field1.Close() // multiple SelectorExpr
 
 	// TODO: this should report some error since the method does return an implementation of io.Closer, but because I don't assign it to a variable we can't close it
 	// Or, we should treat assignment to _ as an ignore? similar to errorcheck?

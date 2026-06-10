@@ -131,7 +131,12 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			}
 			if selector.Sel.Name == "Close" && stmt.Args == nil && stmt.Ellipsis == token.NoPos && callReturnsError(pass.TypesInfo, stmt) {
 				// Close called so we remove the X from the map
-				obj := pass.TypesInfo.Uses[selector.X.(*ast.Ident)]
+				id, ok := selector.X.(*ast.Ident)
+				if !ok {
+					// one case in which we hit this is in nested SelectorExprs, e.g: `resp.Body.Close()`
+					break
+				}
+				obj := pass.TypesInfo.Uses[id]
 				delete(open, obj)
 			}
 		case *ast.ReturnStmt:
