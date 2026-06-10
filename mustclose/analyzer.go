@@ -46,17 +46,27 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		switch stmt := node.(type) {
 		case *ast.ValueSpec:
 			// variable declaration
-			obj := pass.TypesInfo.Defs[stmt.Names[0]]
-			if types.Implements(obj.Type(), closerType) {
-				open[obj] = struct{}{}
+			var found bool
+			for _, name := range stmt.Names {
+				obj := pass.TypesInfo.Defs[name]
+				if obj == nil {
+					continue
+				}
+				if types.Implements(obj.Type(), closerType) {
+					open[obj] = struct{}{}
+					found = true
+				}
+			}
+			if found {
 				return false
 			}
+
 		case *ast.AssignStmt:
 			if stmt.Tok != token.DEFINE {
 				break
 			}
 			// short variable declaration
-			found := false
+			var found bool
 			for _, lhs := range stmt.Lhs {
 				// could still be a var assignment iso definition when you have multiple lhs vars with := , if at least one of them is a declaration. In that case, ok will be false
 				obj, ok := pass.TypesInfo.Defs[lhs.(*ast.Ident)]

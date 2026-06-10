@@ -82,6 +82,9 @@ func main() {
 	var b *example // want "Closed is not called on b"
 	_ = b
 
+	var b2, b3 *example // want "Closed is not called on b2" "Closed is not called on b3"
+	_, _ = b2, b3
+
 	// directly implements closer
 	var c example2 // want "Closed is not called on c"
 	_ = c
