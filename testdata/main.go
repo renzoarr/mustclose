@@ -46,7 +46,7 @@ func errorChecker(err error) {
 
 // someFunc creates a Closer object but doesn't call close nor returns it, so it should be reported by the analyzer
 func someFunc() {
-	e := example2{} // want "Closed is not called on e"
+	e := example2{} // want "Close is not called on e"
 	_ = e
 }
 
@@ -79,22 +79,22 @@ func main() {
 	_ = a
 
 	// TBD: change this to not throw an error since it's nil
-	var b *example // want "Closed is not called on b"
+	var b *example // want "Close is not called on b"
 	_ = b
 
-	var b2, b3 *example // want "Closed is not called on b2" "Closed is not called on b3"
+	var b2, b3 *example // want "Close is not called on b2" "Close is not called on b3"
 	_, _ = b2, b3
 
 	// directly implements closer
-	var c example2 // want "Closed is not called on c"
+	var c example2 // want "Close is not called on c"
 	_ = c
 
 	// TBD: change this to not throw an error since it's nil
 	// pointer to struct implements closer
-	var d *example2 // want "Closed is not called on d"
+	var d *example2 // want "Close is not called on d"
 	_ = d
 
-	e := &example{} // want "Closed is not called on e"
+	e := &example{} // want "Close is not called on e"
 	_ = e
 
 	var f example2
@@ -106,19 +106,19 @@ func main() {
 	var h example2
 	defer h.Close()
 
-	var i io.Closer = &example{} // want "Closed is not called on i"
+	var i io.Closer = &example{} // want "Close is not called on i"
 	_ = i                        // to avoid unused variable error
 
-	var j io.Closer // want "Closed is not called on j"
+	var j io.Closer // want "Close is not called on j"
 	_ = j           // to avoid unused variable error
 
-	var k io.ReadCloser // want "Closed is not called on k"
+	var k io.ReadCloser // want "Close is not called on k"
 	_ = k               // to avoid unused variable error
 
-	l, err := os.Create("/tmp/blah") // want "Closed is not called on l"
+	l, err := os.Create("/tmp/blah") // want "Close is not called on l"
 	_, _ = l, err                    // to avoid unused variable error
 
-	m := getImpl2() // want "Closed is not called on m"
+	m := getImpl2() // want "Close is not called on m"
 	_ = m
 
 	n := getImpl2Ptr()
@@ -127,20 +127,20 @@ func main() {
 	o := getImpl2Ptr()
 	go o.Close()
 
-	getImpl2Ptr()       // want "Closed is not called on the result of getImpl2Ptr"
-	go getImpl2Ptr()    // want "Closed is not called on the result of getImpl2Ptr"
-	defer getImpl2Ptr() // want "Closed is not called on the result of getImpl2Ptr"
+	getImpl2Ptr()       // want "Close is not called on the result of getImpl2Ptr"
+	go getImpl2Ptr()    // want "Close is not called on the result of getImpl2Ptr"
+	defer getImpl2Ptr() // want "Close is not called on the result of getImpl2Ptr"
 
-	os.Create("/tmp/blah")       // want "Closed is not called on the result of Create"
-	go os.Create("/tmp/blah")    // want "Closed is not called on the result of Create"
-	defer os.Create("/tmp/blah") // want "Closed is not called on the result of Create"
+	os.Create("/tmp/blah")       // want "Close is not called on the result of Create"
+	go os.Create("/tmp/blah")    // want "Close is not called on the result of Create"
+	defer os.Create("/tmp/blah") // want "Close is not called on the result of Create"
 
 	// declare p before using it as lhs with :=
-	var p example2                    // want "Closed is not called on p"
-	p, q := multipleImplementations() // want "Closed is not called on q"
+	var p example2                    // want "Close is not called on p"
+	p, q := multipleImplementations() // want "Close is not called on q"
 	_, _ = p, q
 
-	r, s := multipleImplementations() // want "Closed is not called on r" "Closed is not called on s"
+	r, s := multipleImplementations() // want "Close is not called on r" "Close is not called on s"
 	_, _ = r, s
 
 	var t example2
@@ -149,7 +149,7 @@ func main() {
 	var u any = example2{}
 	switch a := u.(type) {
 	case example2:
-		b := a // want "Closed is not called on b"
+		b := a // want "Close is not called on b"
 		_ = b
 	default:
 	}
@@ -167,7 +167,7 @@ func main() {
 
 	// TODO: this should report some error since the method does return an implementation of io.Closer, but because I don't assign it to a variable we can't close it
 	// Or, we should treat assignment to _ as an ignore? similar to errorcheck?
-	// _ = getImpl2Ptr() // "Closed is not called on the result of getImpl2Ptr()"
+	// _ = getImpl2Ptr() // "Close is not called on the result of getImpl2Ptr()"
 
 	// TODO
 	// aa, _ := os.Open("file.txt")

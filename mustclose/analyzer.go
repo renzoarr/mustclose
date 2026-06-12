@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"sort"
 
 	"golang.org/x/tools/go/analysis"
 	// "golang.org/x/tools/go/packages"
@@ -25,7 +26,7 @@ func init() {
 func NewAnalyzer() *analysis.Analyzer {
 	return &analysis.Analyzer{
 		Name:     "mustclose",
-		Doc:      "Checks that any var* implementing the io.Closer interface is closed.",
+		Doc:      "reports values that implement io.Closer but for which Close is never called",
 		Run:      run,
 		Requires: []*analysis.Analyzer{}, // I should parse all types definitions here
 	}
@@ -167,19 +168,24 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		ast.Inspect(f, inspect)
 	}
 
+	diags := make([]analysis.Diagnostic, 0, len(open)+len(unassigned))
 	for id := range open {
-		pass.Report(analysis.Diagnostic{
+		diags = append(diags, analysis.Diagnostic{
 			Pos:     id.Pos(),
-			Message: fmt.Sprintf("Closed is not called on %s", id.Name()),
+			Message: fmt.Sprintf("Close is not called on %s", id.Name()),
 		})
 	}
 	for id := range unassigned {
-		pass.Report(analysis.Diagnostic{
+		diags = append(diags, analysis.Diagnostic{
 			Pos:     id.Pos(),
-			Message: fmt.Sprintf("Closed is not called on the result of %s", id.Name()),
+			Message: fmt.Sprintf("Close is not called on the result of %s", id.Name()),
 		})
 	}
 
+	sort.Slice(diags, func(i, j int) bool { return diags[i].Pos < diags[j].Pos })
+	for _, d := range diags {
+		pass.Report(d)
+	}
 	return nil, nil
 }
 
