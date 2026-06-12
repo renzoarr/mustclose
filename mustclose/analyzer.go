@@ -3,7 +3,6 @@ package mustclose
 import (
 	"fmt"
 	"go/ast"
-	"go/importer"
 	"go/token"
 	"go/types"
 
@@ -15,12 +14,12 @@ var closerType *types.Interface
 var errorType *types.Interface
 
 func init() {
-	ioPackage, err := importer.Default().Import("io")
-	if err != nil {
-		panic(fmt.Sprintf("failed to import io package: %s", err))
-	}
-	closerType = ioPackage.Scope().Lookup("Closer").Type().Underlying().(*types.Interface)
-	errorType = types.Universe.Lookup("error").Type().Underlying().(*types.Interface)
+	namedErrorType := types.Universe.Lookup("error").Type()
+	errorType = namedErrorType.Underlying().(*types.Interface)
+
+	sig := types.NewSignatureType(nil, nil, nil, nil, types.NewTuple(types.NewVar(token.NoPos, nil, "", namedErrorType)), false)
+	closeMethod := types.NewFunc(token.NoPos, nil, "Close", sig)
+	closerType = types.NewInterfaceType([]*types.Func{closeMethod}, nil).Complete()
 }
 
 func NewAnalyzer() *analysis.Analyzer {
