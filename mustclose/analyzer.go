@@ -138,7 +138,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 				// TODO: what if the close method is assigned to a variable and then called? like `closeFunc := a.Close; closeFunc()`
 				break
 			}
-			if selector.Sel.Name == "Close" && stmt.Args == nil && stmt.Ellipsis == token.NoPos && callReturnsError(pass.TypesInfo, stmt) {
+			if selector.Sel.Name == "Close" && stmt.Args == nil && stmt.Ellipsis == token.NoPos && callReturnsSingleError(pass.TypesInfo, stmt) {
 				// Close called so we remove the X from the map
 				id, ok := selector.X.(*ast.Ident)
 				if !ok {
@@ -183,17 +183,12 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	return nil, nil
 }
 
-func callReturnsError(typesInfo *types.Info, call *ast.CallExpr) bool {
-	switch t := typesInfo.Types[call].Type.(type) {
-	case *types.Named:
-		// Single return
-		return types.Implements(t, errorType)
-	case *types.Pointer:
-		// Single return via pointer
-		return types.Implements(t, errorType)
+func callReturnsSingleError(typesInfo *types.Info, call *ast.CallExpr) bool {
+	t, ok := typesInfo.Types[call].Type.(*types.Named)
+	if !ok {
+		return false
 	}
-
-	return false
+	return types.Implements(t, errorType)
 }
 
 func callReturnsCloser(typesInfo *types.Info, call *ast.CallExpr) bool {
