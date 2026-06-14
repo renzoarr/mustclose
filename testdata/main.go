@@ -56,6 +56,18 @@ func someFunc2() example2 {
 	return e
 }
 
+// someFunc3 creates a Closer object and returns it instead of closing it
+func someFunc3() *example {
+	e := &example{} // ok. is returned
+	return e
+}
+
+// someFunc4 creates a Closer object and returns it instead of closing it
+func someFunc4() (string, *example) {
+	e := &example{} // ok. is returned
+	return "test", e
+}
+
 type structWithCloser struct {
 	field1 *example
 }
