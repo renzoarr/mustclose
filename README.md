@@ -54,3 +54,17 @@ case example2:
 default:
 }
 ```
+
+5. open io.Closer returned in struct will raise warning
+```go 
+// ok
+func someFunc2() example2 {
+	e := example2{} // no warning, e is returned
+	return e
+}
+
+func returnCloserInStruct2() structWithCloser {
+	a := &example{} // false positive: we are returning it in the struct so we shouldn't close it here
+	return structWithCloser{field1: a}
+}
+```
