@@ -165,6 +165,13 @@ func main() {
 	w := structWithCloser{field1: &example{}}
 	w.field1.Close() // multiple SelectorExpr
 
+	var x io.ReadCloser // want "Close is not called on x"
+	_ = x
+
+	var y any = example2{}
+	z := y.(example2) // want "Close is not called on z"
+	_ = z
+
 	// TODO: this should report some error since the method does return an implementation of io.Closer, but because I don't assign it to a variable we can't close it
 	// Or, we should treat assignment to _ as an ignore? similar to errorcheck?
 	// _ = getImpl2Ptr() // "Close is not called on the result of getImpl2Ptr()"

@@ -60,7 +60,6 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			if found {
 				return false
 			}
-
 		case *ast.AssignStmt:
 			if stmt.Tok != token.DEFINE {
 				break
@@ -114,7 +113,6 @@ func run(pass *analysis.Pass) (interface{}, error) {
 				unassigned[obj] = struct{}{}
 				return false
 			}
-
 		case *ast.DeferStmt:
 			// find defer calls that return io.Closers
 			if callReturnsCloser(pass.TypesInfo, stmt.Call) {
@@ -131,7 +129,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		default:
 		}
 
-		// find all Close() calls, and returned variables that implement io.Closer
+		// find all Close() calls, and io.Closer returns
 		switch stmt := node.(type) {
 		case *ast.CallExpr:
 			selector, ok := stmt.Fun.(*ast.SelectorExpr)
