@@ -39,9 +39,6 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	unassigned := map[types.Object]struct{}{}
 
 	inspect := func(node ast.Node) bool {
-		// TODO: should we also check fields in structs? lilke http resp.Body which you need to call close on as well?
-		// we should also not raise an error for closers that are returned as part of a struct.
-
 		// find all variables that implement io.Closer
 		switch stmt := node.(type) {
 		case *ast.ValueSpec:
@@ -133,8 +130,8 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		switch stmt := node.(type) {
 		case *ast.CallExpr:
 			selector, ok := stmt.Fun.(*ast.SelectorExpr)
-			if !ok { // Closer is a method, so it should always be a selector expression, if it's not we can ignore it
-				// TODO: what if the close method is assigned to a variable and then called? like `closeFunc := a.Close; closeFunc()`
+			// Closer is a method, so it should always be a selector expression, if it's not we can ignore it
+			if !ok {
 				break
 			}
 			if selector.Sel.Name == "Close" && stmt.Args == nil && stmt.Ellipsis == token.NoPos && callReturnsSingleError(pass.TypesInfo, stmt) {

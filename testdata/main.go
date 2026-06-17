@@ -90,19 +90,15 @@ func main() {
 	var a example
 	_ = a
 
-	// TBD: change this to not throw an error since it's nil
 	var b *example // want "Close is not called on b"
 	_ = b
 
 	var b2, b3 *example // want "Close is not called on b2" "Close is not called on b3"
 	_, _ = b2, b3
 
-	// directly implements closer
 	var c example2 // want "Close is not called on c"
 	_ = c
 
-	// TBD: change this to not throw an error since it's nil
-	// pointer to struct implements closer
 	var d *example2 // want "Close is not called on d"
 	_ = d
 
@@ -169,8 +165,7 @@ func main() {
 	var v any = example2{}
 	switch a := v.(type) {
 	case example2:
-		// TODO: we should also return an error if a is not assigned to another var
-		fmt.Println(a)
+		fmt.Println(a) // limitation
 	default:
 	}
 
@@ -184,11 +179,8 @@ func main() {
 	z := y.(example2) // want "Close is not called on z"
 	_ = z
 
-	// TODO: this should report some error since the method does return an implementation of io.Closer, but because I don't assign it to a variable we can't close it
-	// Or, we should treat assignment to _ as an ignore? similar to errorcheck?
 	// _ = getImpl2Ptr() // "Close is not called on the result of getImpl2Ptr()"
 
-	// TODO
 	// aa, _ := os.Open("file.txt")
 	// bb := aa   // assuming aa is a pointer
 	// bb.Close() // we shouldn't fail on aa not being closed

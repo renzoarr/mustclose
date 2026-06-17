@@ -68,3 +68,10 @@ func returnCloserInStruct2() structWithCloser {
 	return structWithCloser{field1: a}
 }
 ```
+
+6. Close() has to be called directly
+```go
+a, _ := os.Open("/tmp/foo")
+closeFunc := a.Close
+closeFunc() // will not clear the warning
+```
