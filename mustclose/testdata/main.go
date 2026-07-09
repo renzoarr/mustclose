@@ -6,36 +6,46 @@ import (
 	"os"
 )
 
-type example struct{}
+type ptrCloser struct{ X int }
 
-func (e *example) Close() error {
+func (e *ptrCloser) Close() error {
 	return nil
 }
 
-type example2 struct{}
+type valCloser struct{ X int }
 
-func (e example2) Close() error {
+func (e valCloser) Close() error {
 	return nil
 }
 
-func getImpl() example {
-	return example{}
+type readClose struct{ X int }
+
+func (e *readClose) Read(p []byte) (n int, err error) {
+	return 0, nil
 }
 
-func getImplPtr() *example {
-	return &example{}
+func (e *readClose) Close() error {
+	return nil
 }
 
-func getImpl2() example2 {
-	return example2{}
+func newptrCloserVal() ptrCloser {
+	return ptrCloser{}
 }
 
-func getImpl2Ptr() *example2 {
-	return &example2{}
+func newPtrCloserPtr() *ptrCloser {
+	return &ptrCloser{}
 }
 
-func multipleImplementations() (example2, example2) {
-	return example2{}, example2{}
+func newValCloser() valCloser {
+	return valCloser{}
+}
+
+func newValCloserPtr() *valCloser {
+	return &valCloser{}
+}
+
+func multipleImplementations() (valCloser, valCloser) {
+	return valCloser{}, valCloser{}
 }
 
 func errorChecker(err error) {
@@ -46,30 +56,30 @@ func errorChecker(err error) {
 
 // someFunc creates a Closer object but doesn't call close nor returns it, so it should be reported by the analyzer
 func someFunc() {
-	e := example2{} // want "Close is not called on e"
+	e := valCloser{} // want "Close is not called on e"
 	_ = e
 }
 
 // someFunc2 creates a Closer object and returns it instead of closing it
-func someFunc2() example2 {
-	e := example2{} // ok. is returned
+func someFunc2() valCloser {
+	e := valCloser{} // ok. is returned
 	return e
 }
 
 // someFunc3 creates a Closer object and returns it instead of closing it
-func someFunc3() *example {
-	e := &example{} // ok. is returned
+func someFunc3() *ptrCloser {
+	e := &ptrCloser{} // ok. is returned
 	return e
 }
 
 // someFunc4 creates a Closer object and returns it instead of closing it
-func someFunc4() (string, *example) {
-	e := &example{} // ok. is returned
+func someFunc4() (string, *ptrCloser) {
+	e := &ptrCloser{} // ok. is returned
 	return "test", e
 }
 
 type structWithCloser struct {
-	field1 *example
+	field1 *ptrCloser
 }
 
 /* false-positives
@@ -85,40 +95,42 @@ func returnCloserInStruct2() structWithCloser {
 }
 */
 
+func zeroValues() {
+	// these are currently false positives. They should be ignored
+
+	var a ptrCloser  // this does not implement io.Closer. Method has pointer receiver
+	var b *ptrCloser // want "Close is not called on b"
+	var c valCloser  // want "Close is not called on c"
+	var d *valCloser // want "Close is not called on d"
+
+	aa := ptrCloser{} // this does not implement io.Closer. Method has pointer receiver
+	cc := valCloser{} // want "Close is not called on cc"
+
+	var i io.Closer      // want "Close is not called on i"
+	var rc io.ReadCloser // want "Close is not called on rc"
+
+	var m1, m2 *ptrCloser // want "Close is not called on m1" "Close is not called on m2"
+
+	_, _, _, _, _, _, _, _, _, _ = a, b, c, d, aa, cc, i, rc, m1, m2
+}
+
 func main() {
-	// this does not implement io.Closer. Method has pointer receiver
-	var a example
-	_ = a
+	b := &ptrCloser{}    // want "Close is not called on b"
+	c := valCloser{X: 1} // want "Close is not called on c"
+	d := &valCloser{}    // want "Close is not called on d"
+	_, _, _ = b, c, d
 
-	var b *example // want "Close is not called on b"
-	_ = b
-
-	var b2, b3 *example // want "Close is not called on b2" "Close is not called on b3"
-	_, _ = b2, b3
-
-	var c example2 // want "Close is not called on c"
-	_ = c
-
-	var d *example2 // want "Close is not called on d"
-	_ = d
-
-	e := &example{} // want "Close is not called on e"
-	_ = e
-
-	var f example2
+	var f valCloser = newValCloser()
 	f.Close()
 
-	var g example2
+	var g valCloser = newValCloser()
 	_ = g.Close()
 
-	var h example2
+	var h valCloser = newValCloser()
 	defer h.Close()
 
-	var i io.Closer = &example{} // want "Close is not called on i"
-	_ = i                        // to avoid unused variable error
-
-	var j io.Closer // want "Close is not called on j"
-	_ = j           // to avoid unused variable error
+	var i io.Closer = &ptrCloser{} // want "Close is not called on i"
+	_ = i                          // to avoid unused variable error
 
 	var k io.ReadCloser // want "Close is not called on k"
 	_ = k               // to avoid unused variable error
@@ -126,60 +138,60 @@ func main() {
 	l, err := os.Create("/tmp/blah") // want "Close is not called on l"
 	_, _ = l, err                    // to avoid unused variable error
 
-	m := getImpl2() // want "Close is not called on m"
+	m := newValCloser() // want "Close is not called on m"
 	_ = m
 
-	n := getImpl2Ptr()
+	n := newValCloserPtr()
 	defer n.Close()
 
-	o := getImpl2Ptr()
+	o := newValCloserPtr()
 	go o.Close()
 
-	getImpl2Ptr()       // want "Close is not called on the result of getImpl2Ptr"
-	go getImpl2Ptr()    // want "Close is not called on the result of getImpl2Ptr"
-	defer getImpl2Ptr() // want "Close is not called on the result of getImpl2Ptr"
+	newValCloserPtr()       // want "Close is not called on the result of newValCloserPtr"
+	go newValCloserPtr()    // want "Close is not called on the result of newValCloserPtr"
+	defer newValCloserPtr() // want "Close is not called on the result of newValCloserPtr"
 
 	os.Create("/tmp/blah")       // want "Close is not called on the result of Create"
 	go os.Create("/tmp/blah")    // want "Close is not called on the result of Create"
 	defer os.Create("/tmp/blah") // want "Close is not called on the result of Create"
 
 	// declare p before using it as lhs with :=
-	var p example2                    // want "Close is not called on p"
+	var p valCloser                   // want "Close is not called on p"
 	p, q := multipleImplementations() // want "Close is not called on q"
 	_, _ = p, q
 
 	r, s := multipleImplementations() // want "Close is not called on r" "Close is not called on s"
 	_, _ = r, s
 
-	var t example2
+	var t valCloser = newValCloser()
 	defer func() { errorChecker(t.Close()) }()
 
-	var u any = example2{}
+	var u any = valCloser{}
 	switch a := u.(type) {
-	case example2:
+	case valCloser:
 		b := a // want "Close is not called on b"
 		_ = b
 	default:
 	}
 
-	var v any = example2{}
+	var v any = valCloser{}
 	switch a := v.(type) {
-	case example2:
+	case valCloser:
 		fmt.Println(a) // limitation
 	default:
 	}
 
-	w := structWithCloser{field1: &example{}}
+	w := structWithCloser{field1: &ptrCloser{}}
 	w.field1.Close() // multiple SelectorExpr
 
-	var x io.ReadCloser // want "Close is not called on x"
+	var x io.ReadCloser = &readClose{} // want "Close is not called on x"
 	_ = x
 
-	var y any = example2{}
-	z := y.(example2) // want "Close is not called on z"
+	var y any = newValCloser()
+	z := y.(valCloser) // want "Close is not called on z"
 	_ = z
 
-	// _ = getImpl2Ptr() // "Close is not called on the result of getImpl2Ptr()"
+	// _ = newValCloserPtr() // "Close is not called on the result of newValCloserPtr()"
 
 	// aa, _ := os.Open("file.txt")
 	// bb := aa   // assuming aa is a pointer
