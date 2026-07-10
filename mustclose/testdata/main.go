@@ -29,23 +29,23 @@ func (e *readClose) Close() error {
 }
 
 func newptrCloserVal() ptrCloser {
-	return ptrCloser{}
+	return ptrCloser{X: 1}
 }
 
 func newPtrCloserPtr() *ptrCloser {
-	return &ptrCloser{}
+	return &ptrCloser{X: 1}
 }
 
 func newValCloser() valCloser {
-	return valCloser{}
+	return valCloser{X: 1}
 }
 
 func newValCloserPtr() *valCloser {
-	return &valCloser{}
+	return &valCloser{X: 1}
 }
 
 func multipleImplementations() (valCloser, valCloser) {
-	return valCloser{}, valCloser{}
+	return valCloser{X: 1}, valCloser{X: 2}
 }
 
 func errorChecker(err error) {
@@ -56,25 +56,25 @@ func errorChecker(err error) {
 
 // someFunc creates a Closer object but doesn't call close nor returns it, so it should be reported by the analyzer
 func someFunc() {
-	e := valCloser{} // want "Close is not called on e"
+	e := newValCloser() // want "Close is not called on e"
 	_ = e
 }
 
 // someFunc2 creates a Closer object and returns it instead of closing it
 func someFunc2() valCloser {
-	e := valCloser{} // ok. is returned
+	e := newValCloser() // ok. is returned
 	return e
 }
 
 // someFunc3 creates a Closer object and returns it instead of closing it
 func someFunc3() *ptrCloser {
-	e := &ptrCloser{} // ok. is returned
+	e := newPtrCloserPtr() // ok. is returned
 	return e
 }
 
 // someFunc4 creates a Closer object and returns it instead of closing it
 func someFunc4() (string, *ptrCloser) {
-	e := &ptrCloser{} // ok. is returned
+	e := newPtrCloserPtr() // ok. is returned
 	return "test", e
 }
 
@@ -166,7 +166,7 @@ func main() {
 	var t valCloser = newValCloser()
 	defer func() { errorChecker(t.Close()) }()
 
-	var u any = valCloser{}
+	var u any = newValCloser()
 	switch a := u.(type) {
 	case valCloser:
 		b := a // want "Close is not called on b"
@@ -174,7 +174,7 @@ func main() {
 	default:
 	}
 
-	var v any = valCloser{}
+	var v any = newValCloser()
 	switch a := v.(type) {
 	case valCloser:
 		fmt.Println(a) // limitation
