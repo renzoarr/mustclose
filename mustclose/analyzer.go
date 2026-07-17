@@ -1,22 +1,19 @@
 package mustclose
 
 import (
-	"fmt"
-	"go/ast"
 	"go/token"
 	"go/types"
 	"sort"
 
 	"golang.org/x/tools/go/analysis"
-	// "golang.org/x/tools/go/packages"
+	"golang.org/x/tools/go/analysis/passes/buildssa"
+	"golang.org/x/tools/go/ssa"
 )
 
 var closerType *types.Interface
-var errorType *types.Interface
 
 func init() {
 	namedErrorType := types.Universe.Lookup("error").Type()
-	errorType = namedErrorType.Underlying().(*types.Interface)
 
 	sig := types.NewSignatureType(nil, nil, nil, nil, types.NewTuple(types.NewVar(token.NoPos, nil, "", namedErrorType)), false)
 	closeMethod := types.NewFunc(token.NoPos, nil, "Close", sig)
@@ -28,154 +25,30 @@ func NewAnalyzer() *analysis.Analyzer {
 		Name:     "mustclose",
 		Doc:      "reports values that implement io.Closer but for which Close is never called",
 		Run:      run,
-		Requires: []*analysis.Analyzer{}, // I should parse all types definitions here
+		Requires: []*analysis.Analyzer{buildssa.Analyzer},
 	}
 }
 
+// msgNotClosed is the uniform diagnostic message. The (currently disabled) AST
+// refinement overlay in refine_messages.go can replace it with a more specific
+// "...on x" / "...on the result of X" variant.
+const msgNotClosed = "Close is not called"
+
 func run(pass *analysis.Pass) (interface{}, error) {
-	// closers that aren't closed
-	open := map[types.Object]struct{}{}
-	// returned closers that are not assigned
-	unassigned := map[types.Object]struct{}{}
-
-	inspect := func(node ast.Node) bool {
-		// find all variables that implement io.Closer
-		switch stmt := node.(type) {
-		case *ast.ValueSpec:
-			// variable declaration
-			var found bool
-			for _, name := range stmt.Names {
-				obj := pass.TypesInfo.Defs[name]
-				if obj == nil {
-					continue
-				}
-				if types.Implements(obj.Type(), closerType) {
-					open[obj] = struct{}{}
-					found = true
-				}
-			}
-			if found {
-				return false
-			}
-		case *ast.AssignStmt:
-			if stmt.Tok != token.DEFINE {
-				break
-			}
-			// short variable declaration
-			var found bool
-			for _, lhs := range stmt.Lhs {
-				// could still be a var assignment iso definition when you have multiple lhs vars with := , if at least one of them is a declaration. In that case, ok will be false
-				obj, ok := pass.TypesInfo.Defs[lhs.(*ast.Ident)]
-				if !ok || obj == nil { // ok is true and obj is nil on the use of := in a switch
-					continue
-				}
-				if types.Implements(obj.Type(), closerType) {
-					open[obj] = struct{}{}
-					found = true
-				}
-			}
-			if found {
-				return false
-			}
-		default:
-		}
-
-		// find all calls that return an io.closer (and not assigned to a variable)
-		switch stmt := node.(type) {
-		case *ast.ExprStmt:
-			// find unassigned function calls
-			if call, ok := stmt.X.(*ast.CallExpr); ok {
-				if callReturnsCloser(pass.TypesInfo, call) {
-					name := ""
-					if id, ok := call.Fun.(*ast.Ident); ok {
-						name = id.Name
-					} else if selector, ok := call.Fun.(*ast.SelectorExpr); ok {
-						name = selector.Sel.Name
-					}
-					obj := types.NewFunc(stmt.Pos(), nil, name, nil)
-					unassigned[obj] = struct{}{}
-					return false
-				}
-			}
-		case *ast.GoStmt:
-			// find go calls that return io.Closers
-			if callReturnsCloser(pass.TypesInfo, stmt.Call) {
-				name := ""
-				if id, ok := stmt.Call.Fun.(*ast.Ident); ok {
-					name = id.Name
-				} else if selector, ok := stmt.Call.Fun.(*ast.SelectorExpr); ok {
-					name = selector.Sel.Name
-				}
-				obj := types.NewFunc(stmt.Call.Pos(), nil, name, nil)
-				unassigned[obj] = struct{}{}
-				return false
-			}
-		case *ast.DeferStmt:
-			// find defer calls that return io.Closers
-			if callReturnsCloser(pass.TypesInfo, stmt.Call) {
-				name := ""
-				if id, ok := stmt.Call.Fun.(*ast.Ident); ok {
-					name = id.Name
-				} else if selector, ok := stmt.Call.Fun.(*ast.SelectorExpr); ok {
-					name = selector.Sel.Name
-				}
-				obj := types.NewFunc(stmt.Call.Pos(), nil, name, nil)
-				unassigned[obj] = struct{}{}
-				return false
-			}
-		default:
-		}
-
-		// find all Close() calls, and io.Closer returns
-		switch stmt := node.(type) {
-		case *ast.CallExpr:
-			selector, ok := stmt.Fun.(*ast.SelectorExpr)
-			// Closer is a method, so it should always be a selector expression, if it's not we can ignore it
-			if !ok {
-				break
-			}
-			if selector.Sel.Name == "Close" && stmt.Args == nil && stmt.Ellipsis == token.NoPos && callReturnsSingleError(pass.TypesInfo, stmt) {
-				// Close called so we remove the X from the map
-				id, ok := selector.X.(*ast.Ident)
-				if !ok {
-					// one case in which we hit this is in nested SelectorExprs, e.g: `resp.Body.Close()`
-					break
-				}
-				obj := pass.TypesInfo.Uses[id]
-				delete(open, obj)
-			}
-		case *ast.ReturnStmt:
-			for _, result := range stmt.Results {
-				ident, ok := result.(*ast.Ident)
-				if !ok {
-					continue
-				}
-				obj := pass.TypesInfo.Uses[ident]
-				delete(open, obj)
-			}
-
-		default:
-		}
-		return true
+	// Detection: SSA is the single source of truth. Every leak is found here and
+	// reported with the uniform message.
+	ssaResult := pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA)
+	var diags []analysis.Diagnostic
+	for _, fn := range ssaResult.SrcFuncs {
+		diags = append(diags, analyzeFunc(fn)...)
 	}
 
-	for _, f := range pass.Files {
-		ast.Inspect(f, inspect)
-	}
-
-	diags := make([]analysis.Diagnostic, 0, len(open)+len(unassigned))
-	for id := range open {
-		diags = append(diags, analysis.Diagnostic{
-			Pos:     id.Pos(),
-			Message: fmt.Sprintf("Close is not called on %s", id.Name()),
-		})
-	}
-	for id := range unassigned {
-		diags = append(diags, analysis.Diagnostic{
-			Pos:     id.Pos(),
-			Message: fmt.Sprintf("Close is not called on the result of %s", id.Name()),
-		})
-	}
+	// --- AST refinement overlay (disabled) --------------------------------
+	// Uncomment to enable source-level message detail ("...on x" / "...on the
+	// result of X"). See refine_messages.go. Kept off for now because the name
+	// recovery reverse-maps SSA positions to the AST, which is a heuristic.
+	// refineMessages(pass, diags)
+	// -----------------------------------------------------------------------
 
 	sort.Slice(diags, func(i, j int) bool { return diags[i].Pos < diags[j].Pos })
 	for _, d := range diags {
@@ -184,26 +57,312 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	return nil, nil
 }
 
-func callReturnsSingleError(typesInfo *types.Info, call *ast.CallExpr) bool {
-	t, ok := typesInfo.Types[call].Type.(*types.Named)
-	if !ok {
-		return false
+// analyzeFunc reports closer values created in fn that are neither closed nor
+// have their ownership transferred out of the function.
+func analyzeFunc(fn *ssa.Function) []analysis.Diagnostic {
+	if fn.Blocks == nil {
+		return nil // external or generic function without a body
 	}
-	return types.Implements(t, errorType)
-}
 
-func callReturnsCloser(typesInfo *types.Info, call *ast.CallExpr) bool {
-	switch t := typesInfo.Types[call].Type.(type) {
-	case *types.Named, *types.Pointer:
-		// Single return
-		return types.Implements(t, closerType)
-	case *types.Tuple:
-		// Multiple returns, we check if any of them is an io.Closer
-		for i := 0; i < t.Len(); i++ {
-			if types.Implements(t.At(i).Type(), closerType) {
-				return true
+	// An Alloc that receives a whole closer value (`*alloc = closer`) is just the
+	// addressable spill slot for that value (e.g. a type-switch binding), not a
+	// fresh origin. Tracking the stored value alone avoids double-reporting.
+	spill := map[ssa.Value]bool{}
+	for _, block := range fn.Blocks {
+		for _, instr := range block.Instrs {
+			if st, ok := instr.(*ssa.Store); ok {
+				if alloc, ok := st.Addr.(*ssa.Alloc); ok && implementsCloser(st.Val.Type()) {
+					spill[alloc] = true
+				}
 			}
 		}
 	}
+
+	var diags []analysis.Diagnostic
+	report := func(pos token.Pos) {
+		diags = append(diags, analysis.Diagnostic{Pos: pos, Message: msgNotClosed})
+	}
+	for _, block := range fn.Blocks {
+		for _, instr := range block.Instrs {
+			// A closer bound to a value (assigned, allocated, extracted, asserted).
+			if v := closerValueOrigin(instr); v != nil {
+				if spill[v] {
+					continue // storage for a value already tracked
+				}
+				if !isHandled(v) {
+					report(originPos(v))
+				}
+				continue
+			}
+			// A closer result that is discarded and can never be closed: a bare
+			// go/defer call, or a multi-value call whose closer component is unused.
+			if pos, ok := discardedCloserResult(instr); ok {
+				report(pos)
+			}
+		}
+	}
+	return diags
+}
+
+// originPos returns the best source position for a closer value. Some SSA values
+// (notably *ssa.Extract) carry no position of their own, so we fall back to the
+// instruction that produced the tuple.
+func originPos(v ssa.Value) token.Pos {
+	if v.Pos() != token.NoPos {
+		return v.Pos()
+	}
+	if ext, ok := v.(*ssa.Extract); ok {
+		return ext.Tuple.Pos()
+	}
+	return token.NoPos
+}
+
+// closerValueOrigin returns the ssa.Value produced by instr that represents a
+// freshly created io.Closer the current function is responsible for, or nil.
+func closerValueOrigin(instr ssa.Instruction) ssa.Value {
+	switch it := instr.(type) {
+	case *ssa.Alloc:
+		// Alloc.Type() is always *T; a nil zero-value declaration is lifted away
+		// and never appears here, which is why bare `var x io.Closer` is ignored.
+		if implementsCloser(it.Type()) {
+			return it
+		}
+	case *ssa.Call:
+		// A single closer return value (whether assigned or used as a bare
+		// statement: both look identical after SSA lifting).
+		// Skip no-op closer factories like io.NopCloser.
+		if implementsCloser(it.Type()) && !isNopCloser(it) {
+			return it
+		}
+	case *ssa.Extract:
+		// One component of a multi-value result (e.g. os.Create's *os.File).
+		if implementsCloser(it.Type()) {
+			return it
+		}
+	case *ssa.TypeAssert:
+		// z := y.(SomeCloser)
+		if !it.CommaOk && implementsCloser(it.AssertedType) {
+			return it
+		}
+	}
+	return nil
+}
+
+// discardedCloserResult reports the position of a call whose io.Closer result is
+// discarded and therefore can never be closed. This covers go/defer statements
+// (whose results are always dropped) and multi-value calls whose closer
+// component is never extracted. No-op closer factories are skipped.
+func discardedCloserResult(instr ssa.Instruction) (token.Pos, bool) {
+	switch it := instr.(type) {
+	case *ssa.Go:
+		if signatureReturnsCloser(it.Common()) && !isNopCloser(it) {
+			return it.Pos(), true
+		}
+	case *ssa.Defer:
+		if signatureReturnsCloser(it.Common()) && !isNopCloser(it) {
+			return it.Pos(), true
+		}
+	case *ssa.Call:
+		// Bare call statement with single-value closer result (no referrers).
+		if implementsCloser(it.Type()) && !isNopCloser(it) {
+			refs := it.Referrers()
+			if refs == nil || len(*refs) == 0 {
+				return it.Pos(), true
+			}
+		}
+		// Multi-value return: check for unextracted closer components.
+		tuple, ok := it.Type().(*types.Tuple)
+		if !ok {
+			return 0, false
+		}
+		for i := 0; i < tuple.Len(); i++ {
+			if implementsCloser(tuple.At(i).Type()) && !hasExtract(it, i) {
+				if !isNopCloser(it) {
+					return it.Pos(), true
+				}
+			}
+		}
+	}
+	return 0, false
+}
+
+func signatureReturnsCloser(common *ssa.CallCommon) bool {
+	results := common.Signature().Results()
+	for i := 0; i < results.Len(); i++ {
+		if implementsCloser(results.At(i).Type()) {
+			return true
+		}
+	}
 	return false
+}
+
+// hasExtract reports whether the multi-value call result at index is extracted
+// by an Extract instruction. In SSA, multi-value returns become tuples, and
+// callers that want to use a specific component emit an Extract instruction at
+// that index. If a closer result is never extracted, it was never retrieved,
+// so it can never be closed (and should be flagged as an error).
+func hasExtract(call *ssa.Call, index int) bool {
+	refs := call.Referrers()
+	if refs == nil {
+		return false
+	}
+	for _, instr := range *refs {
+		if ext, ok := instr.(*ssa.Extract); ok && ext.Index == index {
+			return true
+		}
+	}
+	return false
+}
+
+// isNopCloser reports whether a call or call instruction is to a known no-op
+// closer factory (e.g. io.NopCloser), whose Close method does nothing and thus
+// doesn't need to be invoked.
+func isNopCloser(cc interface{}) bool {
+	var common *ssa.CallCommon
+	switch c := cc.(type) {
+	case *ssa.Call:
+		common = c.Common()
+	case *ssa.Go:
+		common = c.Common()
+	case *ssa.Defer:
+		common = c.Common()
+	default:
+		return false
+	}
+	return isNopCloserCall(common)
+}
+
+func isNopCloserCall(common *ssa.CallCommon) bool {
+	callee := common.StaticCallee()
+	if callee == nil {
+		return false
+	}
+	pkg := callee.Pkg
+	if pkg == nil {
+		return false
+	}
+	// Allowlist of functions that return no-op closers.
+	// Format: "package/path.FuncName"
+	fqn := pkg.Pkg.Path() + "." + callee.Name()
+	switch fqn {
+	case "io.NopCloser":
+		return true
+	}
+	return false
+}
+
+// isHandled reports whether the closer value is closed or its ownership escapes
+// the current function, by walking the value's referrers transitively.
+func isHandled(root ssa.Value) bool {
+	visited := map[ssa.Value]bool{}
+	var walk func(v ssa.Value) bool
+
+	// storeEscapes reports whether storing the tracked value into addr transfers
+	// ownership away from the current function: either into a location that
+	// outlives it (a global, parameter, receiver field, captured variable, or a
+	// heap object obtained elsewhere), or into a local aggregate that is itself
+	// closed, returned or captured. A store into a purely local aggregate that is
+	// only handed to another function is NOT an escape — consistent with the
+	// convention that a callee does not close what it receives.
+	storeEscapes := func(addr ssa.Value) bool {
+		base := addr
+		for {
+			switch a := base.(type) {
+			case *ssa.FieldAddr:
+				base = a.X
+				continue
+			case *ssa.IndexAddr:
+				base = a.X
+				continue
+			}
+			break
+		}
+		if _, ok := base.(*ssa.Alloc); ok {
+			return walk(base) // local aggregate: handled only if it escapes/closes
+		}
+		return true // global / parameter / receiver / captured / heap object
+	}
+
+	walk = func(v ssa.Value) bool {
+		if visited[v] {
+			return false
+		}
+		visited[v] = true
+		refs := v.Referrers()
+		if refs == nil {
+			return false
+		}
+		for _, instr := range *refs {
+			switch it := instr.(type) {
+			case ssa.CallInstruction:
+				// Close invoked on v, or v captured by a deferred/go closure.
+				if isCloseCall(it.Common(), v) {
+					return true
+				}
+			case *ssa.Return:
+				return true // returned to the caller
+			case *ssa.Store:
+				if it.Val == v && storeEscapes(it.Addr) {
+					return true // ownership moved to a persistent owner
+				}
+			case *ssa.MakeClosure:
+				return true // captured by a closure that may close it
+			case *ssa.TypeAssert:
+				return true // content extracted and tracked separately
+			case *ssa.MakeInterface:
+				if walk(it) {
+					return true
+				}
+			case *ssa.ChangeType:
+				if walk(it) {
+					return true
+				}
+			case *ssa.ChangeInterface:
+				if walk(it) {
+					return true
+				}
+			case *ssa.Convert:
+				if walk(it) {
+					return true
+				}
+			case *ssa.UnOp:
+				if walk(it) {
+					return true // load of a value copy
+				}
+			case *ssa.Phi:
+				if walk(it) {
+					return true
+				}
+			case *ssa.FieldAddr:
+				if walk(it) {
+					return true // reached via a field of a tracked aggregate
+				}
+			case *ssa.IndexAddr:
+				if walk(it) {
+					return true // reached via an element of a tracked aggregate
+				}
+			case *ssa.Slice:
+				if walk(it) {
+					return true // aggregate re-sliced (e.g. before return)
+				}
+			}
+		}
+		return false
+	}
+	return walk(root)
+}
+
+// isCloseCall reports whether common is a call to Close with v as its receiver.
+func isCloseCall(common *ssa.CallCommon, v ssa.Value) bool {
+	if common.IsInvoke() {
+		return common.Method.Name() == "Close" && common.Value == v
+	}
+	if fn, ok := common.Value.(*ssa.Function); ok {
+		return fn.Name() == "Close" && len(common.Args) > 0 && common.Args[0] == v
+	}
+	return false
+}
+
+func implementsCloser(t types.Type) bool {
+	return types.Implements(t, closerType)
 }
