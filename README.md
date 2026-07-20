@@ -34,6 +34,12 @@ Two consequences worth stating up front:
 - A callee is never assumed to close what it receives, matching idiomatic Go
   (`io.Copy`, decoders, and friends do not close their arguments).
 
+Diagnostics currently use a uniform message (`Close is not called`). An optional
+overlay that names the offending value — the bound variable (`Close is not called
+on f`) or, for a discarded call result, the callee (`Close is not called on the
+result of Open`) — lives in `refine_messages.go` but is disabled by default, as it
+reverse-maps SSA positions back to the AST (a heuristic). Enable it by uncommenting
+the `refineMessages` call in `run`.
 
 ## How to run with golangci-lint
 TODO

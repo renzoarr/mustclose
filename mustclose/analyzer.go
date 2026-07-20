@@ -43,6 +43,13 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		diags = append(diags, analyzeFunc(fn)...)
 	}
 
+	// --- AST refinement overlay (disabled) --------------------------------
+	// Uncomment to enable source-level message detail ("...on x" / "...on the
+	// result of X"). See refine_messages.go. Kept off for now because the name
+	// recovery reverse-maps SSA positions to the AST, which is a heuristic.
+	// refineMessages(pass, diags)
+	// -----------------------------------------------------------------------
+
 	sort.Slice(diags, func(i, j int) bool { return diags[i].Pos < diags[j].Pos })
 	for _, d := range diags {
 		pass.Report(d)
