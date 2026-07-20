@@ -43,13 +43,6 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		diags = append(diags, analyzeFunc(fn)...)
 	}
 
-	// --- AST refinement overlay (disabled) --------------------------------
-	// Uncomment to enable source-level message detail ("...on x" / "...on the
-	// result of X"). See refine_messages.go. Kept off for now because the name
-	// recovery reverse-maps SSA positions to the AST, which is a heuristic.
-	// refineMessages(pass, diags)
-	// -----------------------------------------------------------------------
-
 	sort.Slice(diags, func(i, j int) bool { return diags[i].Pos < diags[j].Pos })
 	for _, d := range diags {
 		pass.Report(d)
@@ -122,8 +115,12 @@ func originPos(v ssa.Value) token.Pos {
 func closerValueOrigin(instr ssa.Instruction) ssa.Value {
 	switch it := instr.(type) {
 	case *ssa.Alloc:
-		// Alloc.Type() is always *T; a nil zero-value declaration is lifted away
-		// and never appears here, which is why bare `var x io.Closer` is ignored.
+		// Alloc.Type() is always *T. In SSA, both `var x T` (zero-value) and
+		// `x := &T{}` (explicit allocation) appear as Alloc instructions.
+		// Without source-level information, we can't distinguish them perfectly.
+		// For now, we treat all Allocs as potential allocations, which means
+		// `var x io.Closer; use(&x)` will be reported as a false positive.
+		// This is a known limitation.
 		if implementsCloser(it.Type()) {
 			return it
 		}
@@ -299,6 +296,12 @@ func isHandled(root ssa.Value) bool {
 				if isCloseCall(it.Common(), v) {
 					return true
 				}
+				// v is being invoked as a function value (e.g. a bound method value or
+				// an anonymous closure that captures the closer). Conservatively treat
+				// any invocation as closing the captured value.
+				if !it.Common().IsInvoke() && it.Common().Value == v {
+					return true
+				}
 			case *ssa.Return:
 				return true // returned to the caller
 			case *ssa.Store:
@@ -306,9 +309,20 @@ func isHandled(root ssa.Value) bool {
 					return true // ownership moved to a persistent owner
 				}
 			case *ssa.MakeClosure:
-				return true // captured by a closure that may close it
+				// A closure that captures the value. Follow the closure through
+				// its referrers to see if it's invoked or stored/returned.
+				if walk(it) {
+					return true
+				}
 			case *ssa.TypeAssert:
-				return true // content extracted and tracked separately
+				// A type assertion v.(T) extracts v as type T.
+				// If T implements Closer, the extracted result is tracked separately,
+				// and ownership of v transfers to that result (so v is handled).
+				// If T does not implement Closer, the assertion doesn't extract a
+				// closer, so v itself remains unhandled.
+				if implementsCloser(it.AssertedType) {
+					return true // ownership transferred to extracted closer
+				}
 			case *ssa.MakeInterface:
 				if walk(it) {
 					return true
@@ -358,7 +372,11 @@ func isCloseCall(common *ssa.CallCommon, v ssa.Value) bool {
 		return common.Method.Name() == "Close" && common.Value == v
 	}
 	if fn, ok := common.Value.(*ssa.Function); ok {
-		return fn.Name() == "Close" && len(common.Args) > 0 && common.Args[0] == v
+		// Guard against package-level functions that happen to be named "Close":
+		// require a method receiver so we don't confuse them with the io.Closer method.
+		return fn.Name() == "Close" &&
+			fn.Signature.Recv() != nil &&
+			len(common.Args) > 0 && common.Args[0] == v
 	}
 	return false
 }

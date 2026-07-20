@@ -158,6 +158,36 @@ func nopCloser(r io.Reader) {
 	go io.NopCloser(r)    // ok: no-op closer
 }
 
+func methodValueNotInvoked() {
+	c := newPtrCloserPtr() // want "Close is not called"
+	closeFn := c.Close
+	_ = closeFn // closeFn never invoked
+}
+
+func typeAssertToNonCloser() {
+	c := newValCloser() // want "Close is not called"
+	var x any = c
+	_, _ = x.(fmt.Stringer) // assert to non-closer
+	// c is still not closed
+}
+
+// Close is a package-level function — NOT the io.Closer.Close method.
+// Calling it must not suppress a "Close is not called" diagnostic.
+func Close(*ptrCloser) {}
+
+func packageFunctionNamedClose() {
+	val := newPtrCloserPtr() // want "Close is not called"
+	Close(val)               // free function, not the io.Closer.Close method
+}
+
+func addressTakenZeroValue() {
+	var c ptrCloser // warning is raised because we take the address of it below. // want "Close is not called"
+	discardZeroCloser(&c)
+}
+
+// Helper: consumes address of closer
+func discardZeroCloser(*ptrCloser) {}
+
 func main() {
 	b := &ptrCloser{}    // want "Close is not called"
 	c := valCloser{X: 1} // want "Close is not called"
