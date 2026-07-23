@@ -164,6 +164,12 @@ func methodValueNotInvoked() {
 	_ = closeFn // closeFn never invoked
 }
 
+func methodValueInvoked() {
+	c := newPtrCloserPtr()
+	closeFn := c.Close
+	closeFn()
+}
+
 func typeAssertToNonCloser() {
 	c := newValCloser() // want "Close is not called"
 	var x any = c

@@ -29,14 +29,7 @@ func NewAnalyzer() *analysis.Analyzer {
 	}
 }
 
-// msgNotClosed is the uniform diagnostic message. The (currently disabled) AST
-// refinement overlay in refine_messages.go can replace it with a more specific
-// "...on x" / "...on the result of X" variant.
-const msgNotClosed = "Close is not called"
-
 func run(pass *analysis.Pass) (interface{}, error) {
-	// Detection: SSA is the single source of truth. Every leak is found here and
-	// reported with the uniform message.
 	ssaResult := pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA)
 	var diags []analysis.Diagnostic
 	for _, fn := range ssaResult.SrcFuncs {
@@ -59,7 +52,7 @@ func analyzeFunc(fn *ssa.Function) []analysis.Diagnostic {
 
 	// An Alloc that receives a whole closer value (`*alloc = closer`) is just the
 	// addressable spill slot for that value (e.g. a type-switch binding), not a
-	// fresh origin. Tracking the stored value alone avoids double-reporting.
+	// fresh origin. Tracking the stored value alone avoids double-reporting
 	spill := map[ssa.Value]bool{}
 	for _, block := range fn.Blocks {
 		for _, instr := range block.Instrs {
@@ -73,11 +66,11 @@ func analyzeFunc(fn *ssa.Function) []analysis.Diagnostic {
 
 	var diags []analysis.Diagnostic
 	report := func(pos token.Pos) {
-		diags = append(diags, analysis.Diagnostic{Pos: pos, Message: msgNotClosed})
+		diags = append(diags, analysis.Diagnostic{Pos: pos, Message: "Close is not called"})
 	}
 	for _, block := range fn.Blocks {
 		for _, instr := range block.Instrs {
-			// A closer bound to a value (assigned, allocated, extracted, asserted).
+			// A closer bound to a value (assigned, allocated, extracted, asserted)
 			if v := closerValueOrigin(instr); v != nil {
 				if spill[v] {
 					continue // storage for a value already tracked
@@ -87,8 +80,8 @@ func analyzeFunc(fn *ssa.Function) []analysis.Diagnostic {
 				}
 				continue
 			}
-			// A closer result that is discarded and can never be closed: a bare
-			// go/defer call, or a multi-value call whose closer component is unused.
+			// A closer result that is discarded and can never be closed
+			// bare go/defer call, or a multi-value call whose returned closer is unused
 			if pos, ok := discardedCloserResult(instr); ok {
 				report(pos)
 			}
@@ -97,13 +90,12 @@ func analyzeFunc(fn *ssa.Function) []analysis.Diagnostic {
 	return diags
 }
 
-// originPos returns the best source position for a closer value. Some SSA values
-// (notably *ssa.Extract) carry no position of their own, so we fall back to the
-// instruction that produced the tuple.
+// originPos returns the source position for a closer value
 func originPos(v ssa.Value) token.Pos {
 	if v.Pos() != token.NoPos {
 		return v.Pos()
 	}
+	// ssa.Extract doesn't carry a position of its own. So return the one from the tuple.
 	if ext, ok := v.(*ssa.Extract); ok {
 		return ext.Tuple.Pos()
 	}
@@ -118,9 +110,8 @@ func closerValueOrigin(instr ssa.Instruction) ssa.Value {
 		// Alloc.Type() is always *T. In SSA, both `var x T` (zero-value) and
 		// `x := &T{}` (explicit allocation) appear as Alloc instructions.
 		// Without source-level information, we can't distinguish them perfectly.
-		// For now, we treat all Allocs as potential allocations, which means
-		// `var x io.Closer; use(&x)` will be reported as a false positive.
-		// This is a known limitation.
+		// We treat all Allocs as potential allocations, which means
+		// `var x io.Closer; use(&x)` will also be flagged as a leak
 		if implementsCloser(it.Type()) {
 			return it
 		}
@@ -160,14 +151,14 @@ func discardedCloserResult(instr ssa.Instruction) (token.Pos, bool) {
 			return it.Pos(), true
 		}
 	case *ssa.Call:
-		// Bare call statement with single-value closer result (no referrers).
+		// Bare call statement with single-value closer result (no referrers)
 		if implementsCloser(it.Type()) && !isNopCloser(it) {
 			refs := it.Referrers()
 			if refs == nil || len(*refs) == 0 {
 				return it.Pos(), true
 			}
 		}
-		// Multi-value return: check for unextracted closer components.
+		// Multi-value return. check for unextracted closer components
 		tuple, ok := it.Type().(*types.Tuple)
 		if !ok {
 			return 0, false
@@ -194,7 +185,7 @@ func signatureReturnsCloser(common *ssa.CallCommon) bool {
 }
 
 // hasExtract reports whether the multi-value call result at index is extracted
-// by an Extract instruction. In SSA, multi-value returns become tuples, and
+// by an Extract instruction. multi-value returns become tuples in ssa, and
 // callers that want to use a specific component emit an Extract instruction at
 // that index. If a closer result is never extracted, it was never retrieved,
 // so it can never be closed (and should be flagged as an error).
@@ -229,6 +220,7 @@ func isNopCloser(cc interface{}) bool {
 	return isNopCloserCall(common)
 }
 
+// todo: change this into a user configurable allowlist?
 func isNopCloserCall(common *ssa.CallCommon) bool {
 	callee := common.StaticCallee()
 	if callee == nil {
@@ -249,7 +241,7 @@ func isNopCloserCall(common *ssa.CallCommon) bool {
 }
 
 // isHandled reports whether the closer value is closed or its ownership escapes
-// the current function, by walking the value's referrers transitively.
+// the current function, by walking the value's referrers
 func isHandled(root ssa.Value) bool {
 	visited := map[ssa.Value]bool{}
 	var walk func(v ssa.Value) bool
@@ -259,7 +251,7 @@ func isHandled(root ssa.Value) bool {
 	// outlives it (a global, parameter, receiver field, captured variable, or a
 	// heap object obtained elsewhere), or into a local aggregate that is itself
 	// closed, returned or captured. A store into a purely local aggregate that is
-	// only handed to another function is NOT an escape — consistent with the
+	// only handed to another function is NOT an escape, consistent with the
 	// convention that a callee does not close what it receives.
 	storeEscapes := func(addr ssa.Value) bool {
 		base := addr
@@ -372,11 +364,7 @@ func isCloseCall(common *ssa.CallCommon, v ssa.Value) bool {
 		return common.Method.Name() == "Close" && common.Value == v
 	}
 	if fn, ok := common.Value.(*ssa.Function); ok {
-		// Guard against package-level functions that happen to be named "Close":
-		// require a method receiver so we don't confuse them with the io.Closer method.
-		return fn.Name() == "Close" &&
-			fn.Signature.Recv() != nil &&
-			len(common.Args) > 0 && common.Args[0] == v
+		return fn.Signature.Recv() != nil && fn.Name() == "Close" && len(common.Args) > 0 && common.Args[0] == v
 	}
 	return false
 }
