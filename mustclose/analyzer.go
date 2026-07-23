@@ -304,6 +304,19 @@ func isHandled(root ssa.Value) bool {
 				if !it.Common().IsInvoke() && it.Common().Value == v {
 					return true
 				}
+				/*
+					// v is a closure/function value passed as a callback argument.
+					// The callee may invoke it, which would execute the Close call captured
+					// inside (e.g. tCleanup(func() { a.Close() })). Ownership is considered
+					// transferred once the closure escapes to an external callee.
+					if _, ok := v.Type().Underlying().(*types.Signature); ok {
+						for _, arg := range it.Common().Args {
+							if arg == v {
+								return true
+							}
+						}
+					}
+				*/
 			case *ssa.Return:
 				return true // returned to the caller
 			case *ssa.Store:
