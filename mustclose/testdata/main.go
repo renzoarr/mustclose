@@ -187,8 +187,13 @@ func packageFunctionNamedClose() {
 }
 
 func addressTakenZeroValue() {
-	var c ptrCloser // warning is raised because we take the address of it below. // want "Close is not called"
+	// warning is raised because we take the address of it below
+	var c ptrCloser // want "Close is not called"
 	discardZeroCloser(&c)
+}
+
+func receivedCloserNotClosed(c io.Closer) {
+	_ = c
 }
 
 // Helper: consumes address of closer
@@ -292,3 +297,36 @@ func main() {
 	cb := ca
 	cb.Close()
 }
+
+func wrap(f func() error) error {
+	return f()
+}
+
+func usesIt(origns ptrCloser) error { return nil }
+
+func hello(origns ptrCloser) error {
+	// even though origns doesn't implement io.Closer, because it's used in a closure, the compiler stores it in an addressable slot (ssa.Alloc), and it get's picked up
+	return wrap(func() error {
+		return usesIt(origns)
+	})
+}
+
+func hello2(origns ptrCloser) error {
+	return usesIt(origns)
+}
+
+/*
+// tCleanup simulates testing.T.Cleanup function, which takes a func() and calls it at the end of the test.
+// This is a common pattern for closing resources in tests.
+func tCleanup(f func()) {
+	f()
+}
+
+// current implementation doesn't see `a` as closed
+func myTestFunc() {
+	a := newValCloser()
+	tCleanup(func() {
+		a.Close()
+	})
+}
+*/
