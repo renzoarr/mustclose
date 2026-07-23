@@ -187,7 +187,8 @@ func packageFunctionNamedClose() {
 }
 
 func addressTakenZeroValue() {
-	var c ptrCloser // warning is raised because we take the address of it below. // want "Close is not called"
+	// warning is raised because we take the address of it below
+	var c ptrCloser // want "Close is not called"
 	discardZeroCloser(&c)
 }
 
