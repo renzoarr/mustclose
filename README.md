@@ -16,62 +16,57 @@ To check all packages in current subdirectories
 mustclose ./...
 ```
 
-## Limitations 
-Some of these will be fixed
+## How it works
 
-1. empty variable declarations will be flaged
+The analyzer is built on SSA (via `golang.org/x/tools/go/analysis/passes/buildssa`).
 
-```go
-var i io.Closer  // will return a warning
-```
+> For every closer **created** in a function, that function must either **close**
+> it or let its **ownership leave** the function. Ownership leaves when the closer
+> is returned, or stored into something that outlives the call (a global, a
+> receiver field, or an aggregate that is itself returned). Anything else — a
+> closer that is created and then dropped, discarded in a local aggregate, or
+> passed somewhere untraceable — is reported.
+
+Two consequences worth stating up front:
+
+- Closers you *receive* (parameters, struct fields) are never flagged — you didn't
+  create them, so closing them is not your responsibility.
+- A callee is never assumed to close what it receives, matching idiomatic Go
+  (`io.Copy`, decoders, and friends do not close their arguments).
 
 
-2. Reassingments are not retracked
+## How to run with golangci-lint
+TODO
 
-```go
-a, _ := os.Open("/tmp/foo") // tracked
-a, _ = os.Open("/tmp/foo")  // reassignment to a fresh closer — *not* re-tracked
-a.Close()                   // closes only the second one, analyzer won't notice if the user
-                            // forgot to close the first value before reassigning.
-```
+## Limitations
 
-3. path-insensitive close detection (no plan to fix)
-```go 
-x, _ := os.Open("/tmp/foo")
-if cond { 
-    x.Close()
-}
-// analyzer will always see x as closed
-```
+- **Path-insensitive close detection (by design).** A `Close` on any path is
+  treated as closing the value. This is deliberate: requiring `Close` on every
+  path would flag common guarded patterns (`if x != nil { x.Close() }`) and produce
+  noisy false positives.
 
-4. missing warning on type switch with io.Closer case
+  ```go
+  x, _ := os.Open("/tmp/foo")
+  if cond {
+      x.Close()
+  }
+  // analyzer sees x as closed
+  ```
 
-```go
-var v any = example2{} // example2 implements io.Closer
-switch a := v.(type) {
-case example2:
-    fmt.Println(a) // we don't return a warning here. We do return a warning if a is assigned to a new variable `b := a`
-default:
-}
-```
+- **A callee is never credited with closing.** Because ownership only leaves the
+  function through a return or a persistent store (see the rule above), passing a
+  created closer to another function does **not** clear the warning:
 
-5. open io.Closer returned in struct will raise warning
-```go 
-// ok
-func someFunc2() example2 {
-	e := example2{} // no warning, e is returned
-	return e
-}
+  ```go
+  f, _ := os.Open("/tmp/foo")
+  process(f)                 // reported: process is not assumed to close f
+  defer fmt.Println(f)       // reported: f enters a variadic slice
+  s := []io.Closer{f}        // reported: f stored in local aggregate, not returned
+  b := box{closer: f}; _ = b // reported: b is discarded, f with it
+  return box{closer: f}      // not reported: ownership returned to caller
+  ```
 
-func returnCloserInStruct2() structWithCloser {
-	a := &example{} // false positive: we are returning it in the struct so we shouldn't close it here
-	return structWithCloser{field1: a}
-}
-```
+  The deliberate trade-off is a false positive when a callee genuinely takes
+  ownership and closes the value (e.g.
+  `func consume(rc io.ReadCloser) { defer rc.Close() }`).
 
-6. Close() has to be called directly
-```go
-a, _ := os.Open("/tmp/foo")
-closeFunc := a.Close
-closeFunc() // will not clear the warning
-```
