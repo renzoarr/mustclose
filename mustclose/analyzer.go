@@ -52,13 +52,23 @@ func analyzeFunc(fn *ssa.Function) []analysis.Diagnostic {
 
 	// An Alloc that receives a whole closer value (`*alloc = closer`) is just the
 	// addressable spill slot for that value (e.g. a type-switch binding), not a
-	// fresh origin. Tracking the stored value alone avoids double-reporting
+	// fresh origin. The same applies when the stored value is a function
+	// parameter that is closer-like (its type or pointer-to-type implements
+	// io.Closer): ownership came from the caller, not this function.
+	// Tracking the stored value alone avoids double-reporting and parameter
+	// false positives.
 	spill := map[ssa.Value]bool{}
 	for _, block := range fn.Blocks {
 		for _, instr := range block.Instrs {
 			if st, ok := instr.(*ssa.Store); ok {
-				if alloc, ok := st.Addr.(*ssa.Alloc); ok && implementsCloser(st.Val.Type()) {
-					spill[alloc] = true
+				if alloc, ok := st.Addr.(*ssa.Alloc); ok {
+					if implementsCloser(st.Val.Type()) {
+						spill[alloc] = true
+						continue
+					}
+					if parameterImplementsCloserOrPointer(st.Val) {
+						spill[alloc] = true
+					}
 				}
 			}
 		}
@@ -371,4 +381,19 @@ func isCloseCall(common *ssa.CallCommon, v ssa.Value) bool {
 
 func implementsCloser(t types.Type) bool {
 	return types.Implements(t, closerType)
+}
+
+func parameterImplementsCloserOrPointer(v ssa.Value) bool {
+	p, ok := v.(*ssa.Parameter)
+	if !ok {
+		return false
+	}
+	t := p.Type()
+	if implementsCloser(t) {
+		return true
+	}
+	if _, isPtr := t.(*types.Pointer); isPtr {
+		return false
+	}
+	return implementsCloser(types.NewPointer(t))
 }

@@ -192,6 +192,10 @@ func addressTakenZeroValue() {
 	discardZeroCloser(&c)
 }
 
+func receivedCloserNotClosed(c io.Closer) {
+	_ = c
+}
+
 // Helper: consumes address of closer
 func discardZeroCloser(*ptrCloser) {}
 
