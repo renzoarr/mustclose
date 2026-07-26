@@ -305,6 +305,7 @@ func isHandled(root ssa.Value) bool {
 					return true
 				}
 				/*
+					// TODO: make this optional
 					// v is a closure/function value passed as a callback argument.
 					// The callee may invoke it, which would execute the Close call captured
 					// inside (e.g. tCleanup(func() { a.Close() })). Ownership is considered
