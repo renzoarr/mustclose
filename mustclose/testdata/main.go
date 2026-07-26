@@ -315,7 +315,6 @@ func hello2(origns ptrCloser) error {
 	return usesIt(origns)
 }
 
-/*
 // tCleanup simulates testing.T.Cleanup function, which takes a func() and calls it at the end of the test.
 // This is a common pattern for closing resources in tests.
 func tCleanup(f func()) {
@@ -329,4 +328,3 @@ func myTestFunc() {
 		a.Close()
 	})
 }
-*/
