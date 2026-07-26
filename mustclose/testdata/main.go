@@ -95,6 +95,28 @@ func returnCloserInStruct2() structWithCloser {
 	return structWithCloser{field1: a}
 }
 
+func returnCloserMethod() func() error {
+	// this covers the case where you may return a client based on a connection, and you return the connection's Close method as a callback to close the client
+	a := &ptrCloser{}
+	return a.Close
+}
+
+func returnCloserCallInFunc() func() error {
+	// this covers the case where you may return a client based on a connection, and you return a cleanup function (that includes the call to Close)
+	a := &ptrCloser{} // ok: escapes via the returned function
+	return func() error {
+		return a.Close()
+	}
+}
+
+func temp() {
+	// We stop tracking in the definition of these functions, since it's returned, but we don't make sure these are called
+	a := returnCloserMethod()
+	_ = a
+	b := returnCloserCallInFunc()
+	_ = b
+}
+
 // commaOkAssert exercises comma-ok type assertions: the extracted closer is
 // tracked like any other origin.
 func commaOkAssert(x any) {
