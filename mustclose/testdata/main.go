@@ -315,6 +315,76 @@ func hello2(origns ptrCloser) error {
 	return usesIt(origns)
 }
 
+func returnCloserMethod() func() error {
+	a := &ptrCloser{}
+	return a.Close
+}
+
+func returnCloserCallInFunc() func() error {
+	a := &ptrCloser{} // ok: escapes via the returned function
+	return func() error {
+		return a.Close()
+	}
+}
+
+func returnCloserCallInFuncWithExtra() (func() error, int) {
+	a := &ptrCloser{} // ok: escapes via the returned function
+	return func() error {
+		return a.Close()
+	}, 1
+}
+
+func returnGenericCleanup() func(string) int {
+	a := &ptrCloser{}
+	return func(_ string) int {
+		a.Close()
+		return 1
+	}
+}
+
+func returnCleanupWithoutClose() func() {
+	a := &ptrCloser{}
+	a.Close()
+	return func() {}
+}
+
+/*
+func returnCloserCallInFuncPreClosed() func() error {
+	a := &ptrCloser{}
+	a.Close()
+	return func() error {
+		return a.Close()
+	}
+}
+*/
+
+func trackCloseCalledInCleanup() {
+	a := returnCloserMethod() // want "Cleanup with Close is not called"
+	_ = a
+	b := returnCloserCallInFunc() // want "Cleanup with Close is not called"
+	_ = b
+	c, _ := returnCloserCallInFuncWithExtra() // want "Cleanup with Close is not called"
+	_ = c
+	d := returnGenericCleanup() // want "Cleanup with Close is not called"
+	_ = d
+	e := returnCloserMethod()
+	e()
+	f := returnCloserCallInFunc()
+	f()
+	g, _ := returnCloserCallInFuncWithExtra()
+	g()
+	h := returnGenericCleanup()
+	h("")
+	/*
+		// this is raising a warning, even though the Close was already called before it was returned
+		g := returnCloserCallInFuncPreClosed()
+		_ = g
+	*/
+	i := returnCleanupWithoutClose()
+	_ = i
+
+}
+
 /*
 // tCleanup simulates testing.T.Cleanup function, which takes a func() and calls it at the end of the test.
 // This is a common pattern for closing resources in tests.
