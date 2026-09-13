@@ -32,8 +32,9 @@ func NewAnalyzer() *analysis.Analyzer {
 func run(pass *analysis.Pass) (interface{}, error) {
 	ssaResult := pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA)
 	var diags []analysis.Diagnostic
+	cleanupProducers := cleanupFunctionProducers(ssaResult.SrcFuncs)
 	for _, fn := range ssaResult.SrcFuncs {
-		diags = append(diags, analyzeFunc(fn)...)
+		diags = append(diags, analyzeFunc(fn, cleanupProducers)...)
 	}
 
 	sort.Slice(diags, func(i, j int) bool { return diags[i].Pos < diags[j].Pos })
@@ -45,7 +46,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 
 // analyzeFunc reports closer values created in fn that are neither closed nor
 // have their ownership transferred out of the function.
-func analyzeFunc(fn *ssa.Function) []analysis.Diagnostic {
+func analyzeFunc(fn *ssa.Function, cleanupProducers map[*ssa.Function]bool) []analysis.Diagnostic {
 	if fn.Blocks == nil {
 		return nil // external or generic function without a body
 	}
@@ -75,29 +76,133 @@ func analyzeFunc(fn *ssa.Function) []analysis.Diagnostic {
 	}
 
 	var diags []analysis.Diagnostic
-	report := func(pos token.Pos) {
-		diags = append(diags, analysis.Diagnostic{Pos: pos, Message: "Close is not called"})
+	report := func(pos token.Pos, cleanup bool) {
+		message := "Close is not called"
+		if cleanup {
+			message = "Cleanup with Close is not called"
+		}
+		diags = append(diags, analysis.Diagnostic{Pos: pos, Message: message})
 	}
 	for _, block := range fn.Blocks {
 		for _, instr := range block.Instrs {
 			// A closer bound to a value (assigned, allocated, extracted, asserted)
-			if v := closerValueOrigin(instr); v != nil {
+			v := closerValueOrigin(instr)
+			cleanup := false
+			if v == nil {
+				v = cleanupValueOrigin(instr, cleanupProducers)
+				cleanup = v != nil
+			}
+			if v != nil {
 				if spill[v] {
 					continue // storage for a value already tracked
 				}
 				if !isHandled(v) {
-					report(originPos(v))
+					report(originPos(v), cleanup)
 				}
 				continue
 			}
 			// A closer result that is discarded and can never be closed
 			// bare go/defer call, or a multi-value call whose returned closer is unused
 			if pos, ok := discardedCloserResult(instr); ok {
-				report(pos)
+				report(pos, false)
 			}
 		}
 	}
 	return diags
+}
+
+// cleanupValueOrigin returns a callback result whose producer is known to
+// return a function that closes a resource captured by that producer.
+func cleanupValueOrigin(instr ssa.Instruction, producers map[*ssa.Function]bool) ssa.Value {
+	var call *ssa.Call
+	var value ssa.Value
+	switch item := instr.(type) {
+	case *ssa.Call:
+		call = item
+		value = item
+	case *ssa.Extract:
+		call, _ = item.Tuple.(*ssa.Call)
+		value = item
+	}
+	if call == nil || value == nil || !isCallbackType(value.Type()) {
+		return nil
+	}
+	if producers[call.Common().StaticCallee()] {
+		return value
+	}
+	return nil
+}
+
+func isCallbackType(t types.Type) bool {
+	_, ok := t.Underlying().(*types.Signature)
+	return ok
+}
+
+// cleanupFunctionProducers identifies functions whose returned callback is a
+// cleanup capability. This is intentionally limited to statically known
+// producers so ordinary callbacks are not treated as cleanup obligations.
+func cleanupFunctionProducers(functions []*ssa.Function) map[*ssa.Function]bool {
+	producers := make(map[*ssa.Function]bool)
+	for _, fn := range functions {
+		results := fn.Signature.Results()
+		hasCallback := false
+		for i := 0; i < results.Len(); i++ {
+			if isCallbackType(results.At(i).Type()) {
+				hasCallback = true
+				break
+			}
+		}
+		if !hasCallback {
+			continue
+		}
+		for _, block := range fn.Blocks {
+			for _, instr := range block.Instrs {
+				ret, ok := instr.(*ssa.Return)
+				if !ok {
+					continue
+				}
+				for _, result := range ret.Results {
+					if isCallbackType(result.Type()) && callbackCloses(result, map[*ssa.Function]bool{}) {
+						producers[fn] = true
+						break
+					}
+				}
+			}
+		}
+	}
+	return producers
+}
+
+func callbackCloses(value ssa.Value, visited map[*ssa.Function]bool) bool {
+	closure, ok := value.(*ssa.MakeClosure)
+	if !ok {
+		return false
+	}
+	fn, ok := closure.Fn.(*ssa.Function)
+	if !ok || visited[fn] {
+		return false
+	}
+	visited[fn] = true
+	if fn.Blocks == nil {
+		return false
+	}
+	for _, block := range fn.Blocks {
+		for _, instr := range block.Instrs {
+			if call, ok := instr.(ssa.CallInstruction); ok {
+				common := call.Common()
+				if common.Method != nil && common.Method.Name() == "Close" {
+					return true
+				}
+				if callee, ok := common.Value.(*ssa.Function); ok && callee.Name() == "Close" && callee.Signature.Recv() != nil {
+					return true
+				}
+			}
+			if nested, ok := instr.(*ssa.MakeClosure); ok && callbackCloses(nested, visited) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // originPos returns the source position for a closer value
@@ -301,7 +406,7 @@ func isHandled(root ssa.Value) bool {
 				// v is being invoked as a function value (e.g. a bound method value or
 				// an anonymous closure that captures the closer). Conservatively treat
 				// any invocation as closing the captured value.
-				if !it.Common().IsInvoke() && it.Common().Value == v {
+				if isFunctionValueInvocation(it.Common(), v) {
 					return true
 				}
 				/*
@@ -379,6 +484,16 @@ func isHandled(root ssa.Value) bool {
 		return false
 	}
 	return walk(root)
+}
+
+func isFunctionValueInvocation(common *ssa.CallCommon, value ssa.Value) bool {
+	if common.IsInvoke() || !isCallbackType(value.Type()) {
+		return false
+	}
+	if common.Value == value {
+		return true
+	}
+	return types.Identical(common.Signature(), value.Type())
 }
 
 // isCloseCall reports whether common is a call to Close with v as its receiver.
