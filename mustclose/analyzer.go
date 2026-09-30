@@ -7,6 +7,7 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/buildssa"
+	"golang.org/x/tools/go/analysis/passes/ctrlflow"
 	"golang.org/x/tools/go/ssa"
 )
 
@@ -20,28 +21,46 @@ func init() {
 	closerType = types.NewInterfaceType([]*types.Func{closeMethod}, nil).Complete()
 }
 
-func NewAnalyzer() *analysis.Analyzer {
-	return &analysis.Analyzer{
-		Name:     "mustclose",
-		Doc:      "reports values that implement io.Closer but for which Close is never called",
-		Run:      run,
-		Requires: []*analysis.Analyzer{buildssa.Analyzer},
-	}
+type Config struct {
+	Names bool
 }
 
-func run(pass *analysis.Pass) (interface{}, error) {
-	ssaResult := pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA)
-	var diags []analysis.Diagnostic
-	cleanupProducers := cleanupFunctionProducers(ssaResult.SrcFuncs)
-	for _, fn := range ssaResult.SrcFuncs {
-		diags = append(diags, analyzeFunc(fn, cleanupProducers)...)
+func NewAnalyzer(cfg Config) *analysis.Analyzer {
+	analyzer := &analysis.Analyzer{
+		Name: "mustclose",
+		Doc:  "reports values that implement io.Closer but for which Close is never called",
+		Run:  run(&cfg),
+	}
+	if cfg.Names {
+		// we need to build our own ssa with debug enabled
+		analyzer.Requires = []*analysis.Analyzer{ctrlflow.Analyzer}
+	} else {
+		analyzer.Requires = []*analysis.Analyzer{buildssa.Analyzer}
 	}
 
-	sort.Slice(diags, func(i, j int) bool { return diags[i].Pos < diags[j].Pos })
-	for _, d := range diags {
-		pass.Report(d)
+	return analyzer
+}
+
+func run(cfg *Config) func(pass *analysis.Pass) (interface{}, error) {
+	return func(pass *analysis.Pass) (interface{}, error) {
+		var srcFuncs []*ssa.Function
+		if cfg.Names {
+			srcFuncs = buildSSADebug(pass)
+		} else {
+			srcFuncs = pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA).SrcFuncs
+		}
+		var diags []analysis.Diagnostic
+		cleanupProducers := cleanupFunctionProducers(srcFuncs)
+		for _, fn := range srcFuncs {
+			diags = append(diags, analyzeFunc(fn, cleanupProducers)...)
+		}
+
+		sort.Slice(diags, func(i, j int) bool { return diags[i].Pos < diags[j].Pos })
+		for _, d := range diags {
+			pass.Report(d)
+		}
+		return nil, nil
 	}
-	return nil, nil
 }
 
 // analyzeFunc reports closer values created in fn that are neither closed nor
@@ -75,11 +94,15 @@ func analyzeFunc(fn *ssa.Function, cleanupProducers map[*ssa.Function]bool) []an
 		}
 	}
 
+	valNames := sourceNames(fn)
 	var diags []analysis.Diagnostic
-	report := func(pos token.Pos, cleanup bool) {
+	report := func(pos token.Pos, cleanup bool, name string) {
 		message := "Close is not called"
 		if cleanup {
 			message = "Cleanup with Close is not called"
+		}
+		if name != "" {
+			message = message + " on " + name
 		}
 		diags = append(diags, analysis.Diagnostic{Pos: pos, Message: message})
 	}
@@ -100,14 +123,14 @@ func analyzeFunc(fn *ssa.Function, cleanupProducers map[*ssa.Function]bool) []an
 					continue // pointer closer borrowed from a parameter (e.g. w.(*os.File))
 				}
 				if !isHandled(v) {
-					report(originPos(v), cleanup)
+					report(originPos(v), cleanup, valNames[v])
 				}
 				continue
 			}
 			// A closer result that is discarded and can never be closed
 			// bare go/defer call, or a multi-value call whose returned closer is unused
 			if pos, ok := discardedCloserResult(instr); ok {
-				report(pos, false)
+				report(pos, false, valNames[v])
 			}
 		}
 	}
