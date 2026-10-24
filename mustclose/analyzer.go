@@ -96,6 +96,9 @@ func analyzeFunc(fn *ssa.Function, cleanupProducers map[*ssa.Function]bool) []an
 				if spill[v] {
 					continue // storage for a value already tracked
 				}
+				if isBorrowedPointerCloserOrigin(v) {
+					continue // pointer closer borrowed from a parameter (e.g. w.(*os.File))
+				}
 				if !isHandled(v) {
 					report(originPos(v), cleanup)
 				}
@@ -524,4 +527,92 @@ func parameterImplementsCloserOrPointer(v ssa.Value) bool {
 		return false
 	}
 	return implementsCloser(types.NewPointer(t))
+}
+
+func assertedTypeIsCloserPointer(t types.Type) bool {
+	_, ok := t.(*types.Pointer)
+	if !ok {
+		return false
+	}
+	return implementsCloser(t)
+}
+
+// isBorrowedPointerCloserOrigin reports a closer value that only unwraps a pointer
+// closer from a caller-owned interface parameter (e.g. w.(*os.File) where w is io.Writer).
+func isBorrowedPointerCloserOrigin(v ssa.Value) bool {
+	ext, ok := v.(*ssa.Extract)
+	if !ok {
+		return false
+	}
+	return isBorrowedPointerCloserExtract(ext)
+}
+
+func isBorrowedPointerCloserExtract(ext *ssa.Extract) bool {
+	if ext.Index != 0 {
+		return false
+	}
+	ta, ok := ext.Tuple.(*ssa.TypeAssert)
+	if !ok {
+		return false
+	}
+	if !assertedTypeIsCloserPointer(ta.AssertedType) {
+		return false
+	}
+	if implementsCloser(ta.X.Type()) {
+		return false
+	}
+	return valueFlowsFromParameter(ta.X)
+}
+
+func valueFlowsFromParameter(v ssa.Value) bool {
+	visited := map[ssa.Value]bool{}
+	var walk func(v ssa.Value) bool
+	walk = func(v ssa.Value) bool {
+		if v == nil || visited[v] {
+			return false
+		}
+		visited[v] = true
+		switch vv := v.(type) {
+		case *ssa.Parameter:
+			return true
+		case *ssa.MakeInterface:
+			return walk(vv.X)
+		case *ssa.ChangeInterface:
+			return walk(vv.X)
+		case *ssa.Convert:
+			return walk(vv.X)
+		case *ssa.UnOp:
+			return walk(vv.X)
+		case *ssa.Phi:
+			for _, edge := range vv.Edges {
+				if walk(edge) {
+					return true
+				}
+			}
+			return false
+		case *ssa.Alloc:
+			refs := v.Referrers()
+			if refs == nil {
+				return false
+			}
+			for _, instr := range *refs {
+				switch it := instr.(type) {
+				case *ssa.Store:
+					if it.Addr == v && walk(it.Val) {
+						return true
+					}
+				case *ssa.UnOp:
+					if walk(it) {
+						return true
+					}
+				}
+			}
+			return false
+		case *ssa.Call, *ssa.Extract:
+			return false
+		default:
+			return false
+		}
+	}
+	return walk(v)
 }

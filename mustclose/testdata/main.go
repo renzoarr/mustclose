@@ -95,6 +95,23 @@ func returnCloserInStruct2() structWithCloser {
 	return structWithCloser{field1: a}
 }
 
+
+func borrowedWriter(w io.Writer) bool {
+	f, ok := w.(*os.File) // should not be flagged, since f is the same underlying value as w and it's not ours to close
+	if !ok {
+		return false
+	}
+	return f.Fd() != 0
+}
+
+func borrowedFileFromAny(r any) bool {
+	f, ok := r.(*os.File)
+	if !ok {
+		return false
+	}
+	return f.Fd() != 0
+}
+
 // commaOkAssert exercises comma-ok type assertions: the extracted closer is
 // tracked like any other origin.
 func commaOkAssert(x any) {
