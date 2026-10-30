@@ -56,7 +56,7 @@ func errorChecker(err error) {
 
 // someFunc creates a Closer object but doesn't call close nor returns it, so it should be reported by the analyzer
 func someFunc() {
-	e := newValCloser() // want "Close is not called"
+	e := newValCloser() // want "^Close is not called( on e)?$"
 	_ = e
 }
 
@@ -118,7 +118,7 @@ func commaOkAssert(x any) {
 	if c, ok := x.(io.Closer); ok {
 		c.Close() // ok: closed
 	}
-	if c, ok := x.(valCloser); ok { // want "Close is not called"
+	if c, ok := x.(valCloser); ok { // want "^Close is not called( on c)?$"
 		_ = c
 	}
 }
@@ -126,13 +126,13 @@ func commaOkAssert(x any) {
 // A closer stored into a local aggregate that is discarded never escapes and is
 // never closed, so it is reported.
 func discardedInSlice() {
-	a := &ptrCloser{} // want "Close is not called"
+	a := &ptrCloser{} // want "^Close is not called( on a)?$"
 	s := []io.Closer{a}
 	_ = s
 }
 
 func discardedInStruct() {
-	a := &ptrCloser{} // want "Close is not called"
+	a := &ptrCloser{} // want "^Close is not called( on a)?$"
 	b := structWithCloser{field1: a}
 	_ = b
 }
@@ -176,7 +176,7 @@ func nopCloser(r io.Reader) {
 }
 
 func methodValueNotInvoked() {
-	c := newPtrCloserPtr() // want "Close is not called"
+	c := newPtrCloserPtr() // want "^Close is not called( on c)?$"
 	closeFn := c.Close
 	_ = closeFn // closeFn never invoked
 }
@@ -188,7 +188,7 @@ func methodValueInvoked() {
 }
 
 func typeAssertToNonCloser() {
-	c := newValCloser() // want "Close is not called"
+	c := newValCloser() // want "^Close is not called( on c)?$"
 	var x any = c
 	_, _ = x.(fmt.Stringer) // assert to non-closer
 	// c is still not closed
@@ -199,13 +199,13 @@ func typeAssertToNonCloser() {
 func Close(*ptrCloser) {}
 
 func packageFunctionNamedClose() {
-	val := newPtrCloserPtr() // want "Close is not called"
+	val := newPtrCloserPtr() // want "^Close is not called( on val)?$"
 	Close(val)               // free function, not the io.Closer.Close method
 }
 
 func addressTakenZeroValue() {
 	// warning is raised because we take the address of it below
-	var c ptrCloser // want "Close is not called"
+	var c ptrCloser // want "^Close is not called( on c)?$"
 	discardZeroCloser(&c)
 }
 
@@ -217,9 +217,9 @@ func receivedCloserNotClosed(c io.Closer) {
 func discardZeroCloser(*ptrCloser) {}
 
 func main() {
-	b := &ptrCloser{}    // want "Close is not called"
-	c := valCloser{X: 1} // want "Close is not called"
-	d := &valCloser{}    // want "Close is not called"
+	b := &ptrCloser{}    // want "^Close is not called( on b)?$"
+	c := valCloser{X: 1} // want "^Close is not called( on c)?$"
+	d := &valCloser{}    // want "^Close is not called( on d)?$"
 	_, _, _ = b, c, d
 
 	var f valCloser = newValCloser()
@@ -231,16 +231,16 @@ func main() {
 	var h valCloser = newValCloser()
 	defer h.Close()
 
-	var i io.Closer = &ptrCloser{} // want "Close is not called"
+	var i io.Closer = &ptrCloser{} // want "^Close is not called( on i)?$"
 	_ = i                          // to avoid unused variable error
 
 	var k io.ReadCloser // ignored: nil zero value, nothing to close
 	_ = k               // to avoid unused variable error
 
-	l, err := os.Create("/tmp/blah") // want "Close is not called"
+	l, err := os.Create("/tmp/blah") // want "^Close is not called( on l)?$"
 	_, _ = l, err                    // to avoid unused variable error
 
-	m := newValCloser() // want "Close is not called"
+	m := newValCloser() // want "^Close is not called( on m)?$"
 	_ = m
 
 	n := newValCloserPtr()
@@ -249,20 +249,20 @@ func main() {
 	o := newValCloserPtr()
 	go o.Close()
 
-	newValCloserPtr()       // want "Close is not called"
-	go newValCloserPtr()    // want "Close is not called"
-	defer newValCloserPtr() // want "Close is not called"
+	newValCloserPtr()       // want "^Close is not called$"
+	go newValCloserPtr()    // want "^Close is not called$"
+	defer newValCloserPtr() // want "^Close is not called$"
 
-	os.Create("/tmp/blah")       // want "Close is not called"
-	go os.Create("/tmp/blah")    // want "Close is not called"
-	defer os.Create("/tmp/blah") // want "Close is not called"
+	os.Create("/tmp/blah")       // want "^Close is not called$"
+	go os.Create("/tmp/blah")    // want "^Close is not called$"
+	defer os.Create("/tmp/blah") // want "^Close is not called$"
 
 	// declare p before using it as lhs assignment with :=
 	var p valCloser
-	p, q := multipleImplementations() // want "Close is not called" "Close is not called"
+	p, q := multipleImplementations() // want "^Close is not called( on p)?$" "^Close is not called( on q)?$"
 	_, _ = p, q
 
-	r, s := multipleImplementations() // want "Close is not called" "Close is not called"
+	r, s := multipleImplementations() // want "^Close is not called( on r)?$" "^Close is not called( on s)?$"
 	_, _ = r, s
 
 	var t valCloser = newValCloser()
@@ -270,7 +270,7 @@ func main() {
 
 	var u any = newValCloser()
 	switch a := u.(type) {
-	case valCloser: // want "Close is not called"
+	case valCloser: // want "^Close is not called( on b)?$"
 		b := a
 		_ = b
 	default:
@@ -279,7 +279,7 @@ func main() {
 	// closed nor allowed to escape, it is reported (was limitation #4).
 	var v any = newValCloser()
 	switch a := v.(type) {
-	case valCloser: // want "Close is not called"
+	case valCloser: // want "^Close is not called$"
 		_ = a.X
 	default:
 	}
@@ -289,7 +289,7 @@ func main() {
 	// receives — it is assumed open and reported.
 	var v2 any = newValCloser()
 	switch a := v2.(type) {
-	case valCloser: // want "Close is not called"
+	case valCloser: // want "^Close is not called( on a)?$"
 		fmt.Println(a)
 	default:
 	}
@@ -297,11 +297,11 @@ func main() {
 	w := structWithCloser{field1: &ptrCloser{}}
 	w.field1.Close() // multiple SelectorExpr
 
-	var x io.ReadCloser = &readClose{} // want "Close is not called"
+	var x io.ReadCloser = &readClose{} // want "^Close is not called( on x)?$"
 	_ = x
 
 	var y any = newValCloser()
-	z := y.(valCloser) // want "Close is not called"
+	z := y.(valCloser) // want "^Close is not called( on z)?$"
 	_ = z
 
 	// Closing through a method value clears the warning (was limitation #6).
@@ -376,13 +376,13 @@ func returnCloserCallInFuncPreClosed() func() error {
 */
 
 func trackCloseCalledInCleanup() {
-	a := returnCloserMethod() // want "Cleanup with Close is not called"
+	a := returnCloserMethod() // want "Cleanup with Close is not called( on a)?$"
 	_ = a
-	b := returnCloserCallInFunc() // want "Cleanup with Close is not called"
+	b := returnCloserCallInFunc() // want "Cleanup with Close is not called( on b)?$"
 	_ = b
-	c, _ := returnCloserCallInFuncWithExtra() // want "Cleanup with Close is not called"
+	c, _ := returnCloserCallInFuncWithExtra() // want "Cleanup with Close is not called( on c)?$"
 	_ = c
-	d := returnGenericCleanup() // want "Cleanup with Close is not called"
+	d := returnGenericCleanup() // want "Cleanup with Close is not called( on d)?$"
 	_ = d
 	e := returnCloserMethod()
 	e()
