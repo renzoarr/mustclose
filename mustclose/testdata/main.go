@@ -3,6 +3,7 @@ package testdata
 import (
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 )
 
@@ -94,7 +95,6 @@ func returnCloserInStruct2() structWithCloser {
 	a := &ptrCloser{} // ok: escapes via the returned struct literal
 	return structWithCloser{field1: a}
 }
-
 
 func borrowedWriter(w io.Writer) bool {
 	f, ok := w.(*os.File) // should not be flagged, since f is the same underlying value as w and it's not ours to close
@@ -400,6 +400,15 @@ func trackCloseCalledInCleanup() {
 	i := returnCleanupWithoutClose()
 	_ = i
 
+}
+
+// closer wrap
+func callsWrap(r http.Response) {
+	defer r.Body.Close()
+	var w http.ResponseWriter
+	// should not be flagged, a.Close() calls Close on r.Body, which is already taken care off.
+	a := http.MaxBytesReader(w, r.Body, 1<<20)
+	_ = a
 }
 
 /*
